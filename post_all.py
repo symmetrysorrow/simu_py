@@ -30,9 +30,9 @@ amp = 10
 cf = 10000
 zure = 30 
 
-pulse_num=200
+pulse_num=500
 
-output="./output/662_142_136"
+output="F:/hata/1172_142_136"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -55,137 +55,23 @@ def MakePulse():
     input_string = f"{output}"
     makepulse_dll.MakePulse(input_string.encode('utf-8'))
 
+    Pulse=np.loadtxt(f"{output}/{para["E"]}keV_{para["position"][0]}/pulse/CH1/CH1_1.dat")
+    SettlingTime=int(np.argmax(Pulse))
+
+    para["SettlingTime"]=SettlingTime
+    with open(f"{output}/input.json","w") as f:
+        json.dump(para,f,indent=4)
+
 def FitRatios():
-    term=15
+    Ratios_dll = ctypes.CDLL('./Ratios.dll')
 
-    with open(f"{output}/input.json", "r") as f:
-        para = json.load(f)
+    Ratios_dll.MakePulse.argtypes = [ctypes.c_char_p]
+    Ratios_dll.MakePulse.restype = None
 
-    all_position= list(range(1, para['n_abs'] + 1))
-
-    time = np.linspace(0, para["samples"] / para["rate"], int(para["samples"]))
-
-    cnt=0
-
-    for posi in para["position"]:
-        data = np.loadtxt(f"{output}/{para["E"]}keV_{posi}/pulse/CH0/CH0_{posi}.dat")
-        plt.plot(time*1e3,data*1e6,label=f"abs-{posi}",color=cm.hsv(float(cnt) / float(len(para["position"]))))
-        cnt+=1
-
-    plt.xlabel("Time [ms]")
-    plt.ylabel("Current [uA]")
-    plt.xlim(0,10)
-    plt.ylim(0,1)
-    plt.grid()
-    plt.legend(loc="best", fancybox=True, shadow=True, fontsize=8)
-    plt.tight_layout()
-    plt.savefig(f"{output}/pulse_post.png", dpi=700)
-    plt.show()
-    plt.cla()
-    
-    heights_ch0=[]
-    heights_ch1=[]
-    rises_ch0=[]
-    rises_ch1=[]
-    decays_ch0=[]
-    decays_ch1=[]
-
-    for j in [0,1]:
-        pulses = natsorted(glob.glob(f"{output}/{para["E"]}keV_*/pulse/CH{j}/CH{j}_*.dat"))
-        data_array = []
-        for i in pulses:
-            pixel = gp.num(os.path.basename(i))[1]
-            data = np.loadtxt(i) 
-            peak,peak_av,peak_index = gp.peak(data,0,int(para['samples']),10,100)
-            rise, rise_10, rise_90 = gp.risetime(data, peak_av, np.argmax(data),0.9,0.1,para['rate'])
-            decay, decay_10, decay_90 = gp.decaytime(data, peak, np.argmax(data),0.9,0.7, para['rate'])
-            if j==0:
-                heights_ch0.append(peak)
-                rises_ch0.append(rise)
-                decays_ch0.append(decay)
-            if j==1:
-                heights_ch1.append(peak)
-                rises_ch1.append(rise)
-                decays_ch1.append(decay)
-    
-    # height/height
-    heights_ch0=np.array(heights_ch0)
-    heights_ch1=np.array(heights_ch1)
-    rises_ch0=np.array(rises_ch0)
-    rises_ch1=np.array(rises_ch1)
-    decays_ch0=np.array(decays_ch0)
-    decays_ch1=np.array(decays_ch1)
-
-    ratio = heights_ch0 / heights_ch1
-
-    position = (
-        (np.array(all_position)  -  1/2 ) * para["length"] / para['n_abs']
-    )
-    popt, pcov = curve_fit(gp.multi_func, ratio, position, p0=np.zeros(term + 1))
-
-    np.savetxt(f"{output}/fit_para.txt", popt)
-    x_fit = np.arange(np.min(ratio), np.max(ratio), 0.01)
-    y_fit = gp.multi_func(x_fit, *tuple(popt))
-
-
-    # --- Plot --------------------------------
-    value = [(float(i)) / float(len(position) + 1) for i in range(len(position))]
-
-    #plt.scatter(df["rise"] * 1e3, df["height"] * 1e6, c=value, s=3.0,cmap="hsv")
-    plt.scatter(rises_ch0 * 1e3, heights_ch0 * 1e6, c=value,cmap="hsv")
-    # plt.title("risetime vs pulse height")
-    plt.xlabel("risetime [ms]")
-    plt.ylabel("pulseheight [uA]")
-    plt.grid()
-    plt.tight_layout()
-    plt.savefig(f"{output}/rise_height.png", dpi=350)
-    plt.show()
-
-    plt.scatter(decays_ch0 * 1e3, heights_ch0 * 1e6,c=value, cmap="hsv")
-    # plt.title("dcaytime vs pulse height")
-    plt.xlabel("decaytime [ms]")
-    plt.ylabel("pulseheight [uA]")
-    plt.grid()
-    plt.tight_layout()
-    plt.savefig(f"{output}/decay_height.png", dpi=350)
-    plt.show()
-
-    plt.scatter(heights_ch0* 1e6, heights_ch1 * 1e6,c=value, cmap="hsv")
-    # plt.title("risetime vs pulse height")
-    plt.xlabel("pulseheight (CH0) [uA]")
-    plt.ylabel("pulseheight (CH1) [uA]")
-    plt.grid()
-    plt.tight_layout()
-    plt.savefig(f"{output}/height1_height2.png", dpi=350)
-    plt.show()
-
-    plt.scatter(ratio, position, c=value,cmap="hsv")
-    plt.plot(x_fit, y_fit, "--")
-    # plt.title("pixel vs pulseheight1/ pulseheight2")
-    plt.xlabel("pulseheight (CH0)/ pulseheight (CH1)")
-    plt.ylabel("position [mm]")
-    plt.ylim(0-1,para['length']+1)
-    plt.grid()
-    plt.tight_layout()
-    plt.savefig(f"{output}/height_ratio.png", dpi=350)
-    plt.show()
+    input_string = f"{output}"
+    Ratios_dll.MakePulse(input_string.encode('utf-8'))
 
 def MakeNoise():
-    def create_output_directry(*path):
-        if path != None:
-        #
-            filenumber = path[0]
-        else:
-            for i in range(1000):
-                folder = os.path.exists(f"./output/{str(i+1)}")
-                if not folder:
-                    os.makedirs(f"./output/{str(i+1)}", exist_ok=True)
-                    filenumber = i + 1
-                    break
-                else:
-                    filenumber = 0
-                    continue
-        return str(filenumber)
 
     # add omega at diagonal
     def add_omega(M, n_abs, omega):
@@ -195,9 +81,7 @@ def MakeNoise():
     
     with open (f"{output}/input.json", "r") as f:
         para = json.load(f)
-        
-    output_number = create_output_directry(para["output"])
-
+    
     n_abs = para["n_abs"]  # absorber pixel
     C_abs = para["C_abs"] / n_abs  # heat capacity per 1-pixel
     C_tes = para["C_tes"]  # heat capacity (TES)
@@ -217,7 +101,7 @@ def MakeNoise():
     E = para["E"]  # energy
     length = para["length"]  # length
     rate = int(para["rate"])  # sample rate
-    samples = int(para["samples"])  # samples
+    samples = int(para["noise_samples"])  # samples
     para["output"] = output
 
     time = np.linspace(0, samples / rate, samples)
@@ -516,7 +400,7 @@ def CheckPulse():
     # simulated noise frequency domain (random phase)
     amp = np.abs(noise_fft)/np.sqrt(df)/(noise_samples/np.sqrt(2.))
 
-    pulse = np.loadtxt(f"{output}/{para["E"]}keV_1/pulse/CH0/CH0_1.dat")
+    pulse = np.loadtxt(f"{output}/{para["E"]}keV_{para["position"][0]}/pulse/CH0/CH0_1.dat")
 
     pulse_fft = np.fft.fft(pulse)
     pulse_amp = np.abs(pulse_fft)/np.sqrt(df)/(noise_samples/np.sqrt(2.))
@@ -554,7 +438,7 @@ def CheckPulse():
 
     cnt = 0
     for i in para["position"]:
-        data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_{i}.dat")
+        data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
         noise_spe = random_noise(noise_spe_dens, cnt)
         #noise = np.fft.ifft(noise_spe, noise_samples).real * 2
         ifft_input = noise_spe*np.sqrt(df)*(d_length/np.sqrt(2))*2 # *2 ???
@@ -604,14 +488,13 @@ def MultiPulse():
 
     def AddPulse(output, para, i, j, noise_samples, noise_spe_dens):
         os.makedirs(f"{output}/{para['E']}keV_{i}/pulse_noise/CH{j}", exist_ok=True)
-        data = np.loadtxt(f"{output}/{para['E']}keV_{i}/pulse/CH{j}/CH{j}_{i}.dat")
+        data = np.loadtxt(f"{output}/{para['E']}keV_{i}/pulse/CH{j}/CH{j}_1.dat")
 
         df = para['rate'] / noise_samples
         d_length = noise_samples
 
-        cnt = random.randint(1, 10000)
-
         for k in range(pulse_num):
+            cnt = random.randint(1, 10000)
             noise_spe = random_noise(noise_spe_dens, cnt)
             ifft_input = noise_spe * np.sqrt(df) * (d_length / np.sqrt(2)) * 2 
             noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
@@ -623,7 +506,7 @@ def MultiPulse():
     noise_samples = len(noise_spe_dens)
 
     for j in [0,1]:
-         with ThreadPoolExecutor(max_workers=4) as executor:
+         with ThreadPoolExecutor(max_workers=11) as executor:
             futures = [
                 executor.submit(AddPulse, output, para, i, j, noise_samples, noise_spe_dens)
                 for i in para["position"]
@@ -634,122 +517,8 @@ def MultiPulse():
                 except Exception as e:
                     print(f"Error occurred: {e}")
 
-def MakeHistgram():
-    def multi_func(X, *params):
-        Y = np.zeros_like(X)
-        for i, param in enumerate(params):
-            Y += param * X**i
-        return Y
-    def gaussian(x, amp, mean, stddev):
-        return amp * np.exp(-((x - mean) ** 2) / (2 * stddev ** 2))
-
-    with open(f"{output}/input.json", "r") as f:
-        para = json.load(f)
-
-    bin_num=20
-
-    fit_para=np.loadtxt(f"{output}/fit_para.txt")
-
-    fwhms=[]
-
-    cnt=0
-
-    plt.figure(figsize=(10,5))
-
-    for i in para["position"]:
-        data_0=pd.read_csv(f"{output}/{para["E"]}keV_{i}/Pulse_noise/output_TES0.csv")
-        data_1=pd.read_csv(f"{output}/{para["E"]}keV_{i}/Pulse_noise/output_TES1.csv")
-        ratio = data_0['height'] / data_1['height']
-        ratio=np.array(ratio)
-
-        position = multi_func(ratio, *tuple(fit_para))
-        hist, bin_edges = np.histogram(position, bins=bin_num, density=True)
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # ビンの中心を計算
-
-        # 初期推定値の設定
-        initial_guess = [np.max(hist), np.mean(position), np.std(position)]
-
-        # ガウスフィッティング
-        popt, pcov = curve_fit(gaussian, bin_centers, hist, p0=initial_guess, maxfev=10000)
-        amp_fit, mean_fit, stddev_fit = popt
-
-        # 半値全幅 (FWHM) の計算
-        fwhm = 2 * stddev_fit * np.sqrt(2 * np.log(2))
-        fwhms.append(fwhm)
-
-        plt.hist(position, bins=bin_num, density=True, alpha=0.6, label=f"abs-{i}",color=cm.hsv(float(cnt) / float(len(para["position"]))))  # ヒストグラム
-        cnt+=1
-        x_fit = np.linspace(bin_edges[0], bin_edges[-1], 1000)  # フィッティング用のx
-        plt.plot(x_fit, gaussian(x_fit, *popt), color="red")  # フィッティング曲線
-
-    fwhms=np.array(fwhms)
-
-    print(fwhms)
-
-    np.savetxt(f"{output}/fwhms.dat", fwhms, fmt='%.5f', header='FWHM FWHM_Error')
-
-    # グラフの設定
-    
-    plt.xlabel('Position[mm]',fontsize=14)
-    plt.ylabel('Density',fontsize=14)
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(f"{output}/Histgram.png",dpi=700)
-    plt.show()
-
-    plt.xlabel("Position[mm]")
-    plt.ylabel("FWHM[mm]")
-    plt.plot(para["position"],fwhms,marker="o")
-    plt.show()
-
-def Optimal_filter():
-    with open(f"{output}/input.json", "r") as f:
-        para = json.load(f)
-
-    noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
-    noise_samples = len(noise_spe_dens)
-
-    time = np.arange(0, 1 / para["rate"] * para["samples"], 1 / para["rate"])
-
-    for j in [0,1]:
-        for i in para["position"]:
-            data_array=[]
-            all_pulses=[]
-
-            os.makedirs(f"{output}/{para["E"]}keV_{i}/pulse_optimal_filter",exist_ok=True)
-                    
-            for k in range(pulse_num):
-                data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse_noise/CH{j}/CH{j}_{k}.dat")
-                all_pulses.append(data)
-
-            average_pulse=np.mean(all_pulses,axis=0)
-            noise_spe=noise_spe_dens**2
-            F = fft.fft(average_pulse)
-            filt = fft.ifft(F[:noise_samples] / noise_spe[:noise_samples]).real
-            filt=filt/np.max(filt)
-            
-            for pulse in all_pulses:
-                pulse_f=pulse*filt
-                peak,peak_av,peak_index = gp.peak(pulse_f,0,int(para['samples']),10,100)
-                rise, rise_10, rise_90 = gp.risetime(pulse_f, peak_av, peak_index,0.9,0.1,para['rate'])
-
-                column = [peak_av, rise]
-                data_array.append(column)
-
-            df_save = pd.DataFrame(data_array, columns=["height", "rise"],index=np.arange(0,pulse_num))
-            df_save.to_csv(f"{output}/{para["E"]}keV_{i}/Pulse_optimal_filter/output_TES{j}.csv")
-
-    plt_pulse=np.loadtxt(f"{output}/{para["E"]}keV_{para["position"][0]}/pulse_noise/CH0/CH0_0.dat")
-    pulse_plt_f=plt_pulse*filt
-    plt.plot(time,pulse_plt_f,label="Optimal filter")
-    plt.plot(time,plt_pulse,label="normal")
-    plt.xlabel("time[ms]")
-    plt.grid()
-    plt.show()
-
-#MakePulse()
+MakePulse()
 #FitRatios()
 #MakeNoise()
 #CheckPulse()
 #MultiPulse()
-MakeHistgram()

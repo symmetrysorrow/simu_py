@@ -7,11 +7,17 @@ import matplotlib.pyplot as plt
 import natsort
 import glob
 import re
+import tqdm
 
 def ReadOutput(FilePath,key):
     df=pd.read_csv(FilePath)
     data = df[key].to_numpy()
     return data
+
+def remove_outliers(data, percentile=0.1):
+    lower_bound = np.percentile(data, percentile)
+    upper_bound = np.percentile(data, 100 - percentile)
+    return data[(data >= lower_bound) & (data <= upper_bound)]
 
 def ReadPulse(Data_path,pulse,path):
     with open(f"{Data_path}/input.json") as f:
@@ -19,7 +25,7 @@ def ReadPulse(Data_path,pulse,path):
     try:
         peak = np.max(pulse)
         peak_index = np.argmax(pulse)
-        peak_av = np.mean(pulse[peak_index - 3 : peak_index +7])
+        peak_av = np.mean(pulse[peak_index - 10 : peak_index +90])
 
         for i in reversed(range(0, peak_index)):
             if pulse[i] <= peak * 0.9:
@@ -42,17 +48,16 @@ def ReadPulse(Data_path,pulse,path):
 
         rise = (rise_90 - rise_10) / input["rate"]
 
-        CheckPoint_height = np.mean(pulse[input["CheckPoint"] - 3 : input["CheckPoint"] +7])
+        ST_height = np.mean(pulse[input["SettlingTime"] - 10 : input["SettlingTime"] +90])
 
-        return [peak_av,peak_index,rise,CheckPoint_height]
+        return [peak_av,peak_index,rise,ST_height]
     except:
         print(path)
 
 def MakeOutput(Data_path,target):
-    print("normal")
     with open(f"{Data_path}/input.json") as f:
         input = json.load(f)
-    for posi in input["Position"]:
+    for posi in tqdm.tqdm(input["position"]):
         for ch in[0,1]:
             results=[]
             pulse_numbers=[]
@@ -64,9 +69,9 @@ def MakeOutput(Data_path,target):
                 pulse_numbers.append(match.group(1))
 
                 pulse=np.loadtxt(path)
-                results.append(ReadPulse(Data_path,pulse))
+                results.append(ReadPulse(Data_path,pulse,path))
 
-            columns=["height","peak_index","rise","CheckPointHeight"]
+            columns=["height","peak_index","rise","ST_Height"]
             df = pd.DataFrame(results,columns=columns,index=pulse_numbers)
             df.to_csv(f"{Data_path}/{input["E"]}keV_{posi}/{target}/output_TES{ch}.csv")
 
@@ -90,23 +95,32 @@ def find_nearest_values(ratios, Fit_para):
 
     return np.array(result)  # numpy配列として返す
 
-def MakeHistgram(data,bin_num):
-    hist, bin_edges = np.histogram(data, bins=bin_num, density=True)
+def optimal_bin_count(data):
+    q1, q3 = np.percentile(data, [25, 75])
+    iqr = q3 - q1  # 四分位範囲
+    bin_width = 2 * iqr / (len(data) ** (1/3))  # ビン幅
+    bin_count = int(np.ceil((np.max(data) - np.min(data)) / bin_width))  # ビン数
+    return max(bin_count, 1)  # ビン数が1未満にならないようにする
+
+def MakeHistgram(data,posi):
+    bin_num = optimal_bin_count(data)
+    hist, bin_edges = np.histogram(data, bins=bin_num, density=False)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # ビンの中心を計算
     initial_guess = [np.max(hist), np.mean(data), np.std(data)]
 
+    plt.hist(data, bins=bin_num, density=False, alpha=0.6, label=f"abs-{posi}")
+
     # ガウスフィッティング
-    popt, pcov = curve_fit(gaussian, bin_centers, hist, p0=initial_guess, maxfev=10000)
+    popt, pcov = curve_fit(gaussian, bin_centers, hist, p0=initial_guess, maxfev=10000000)
     amp_fit, mean_fit, stddev_fit = popt
     fwhm = 2 * stddev_fit * np.sqrt(2 * np.log(2))
 
-    plt.hist(data, bins=bin_num, density=True, alpha=0.6, label="Histogram")  # ヒストグラム
+      # ヒストグラム
     x_fit = np.linspace(bin_edges[0], bin_edges[-1], 1000)  # フィッティング用のx
-    plt.plot(x_fit, gaussian(x_fit, *popt), label="Gaussian Fit", color="red")  # フィッティング曲線
+    plt.plot(x_fit, gaussian(x_fit, *popt),color="red",alpha=0.5)  # フィッティング曲線
+    return fwhm,fwhm/mean_fit
 
-    return fwhm
-
-def Resos(Data_path,target,bin_num):
+def Resos(Data_path,target,show):
     fit_para_path=f"{Data_path}/ratios.txt"
     fit_para=np.loadtxt(fit_para_path, delimiter=',')
 
@@ -121,114 +135,125 @@ def Resos(Data_path,target,bin_num):
         CH1_files.append(f"{Data_path}/{para['E']}keV_{posi}/{target}/output_TES1.csv")
 
     fwhms=[]
-    plt.figure(figsize=(4,3))
 
-    for CH0,CH1 in zip(CH0_files,CH1_files):
+    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
         CH0_heights=ReadOutput(CH0,"height")
         CH1_heights=ReadOutput(CH1,"height")
         
         ratios=CH0_heights/CH1_heights
+
         positions=find_nearest_values(ratios,fit_para)
+        #positions=remove_outliers(positions)
         
-        fwhm=MakeHistgram(positions,bin_num)
+        fwhm,reso=MakeHistgram(positions,posi)
         fwhms.append(fwhm)
-    
-    plt.xlabel("Position",fontsize=15)
-    plt.ylabel("Density",fontsize=15)
-    plt.tight_layout()
-    plt.savefig(f"{Data_path}/position_histgram_{target}.png")
-    plt.show()
+
     fwhms=np.array(fwhms)
     np.savetxt(f"{Data_path}/fwhms_{target}.txt",fwhms)
-    plt.plot(para["position"],fwhms)
-    plt.ylim(0,max(fwhms)+0.1)
-    plt.show()
+
+    if show:
+        plt.xlabel("Position",fontsize=15)
+        plt.ylabel("Count",fontsize=15)
+        plt.tight_layout()
+        #plt.legend()
+        plt.savefig(f"{Data_path}/position_histgram_{target}.png")
+        plt.show()
+        plt.plot(para["position"],fwhms)
+        plt.show()
 
     ene_reso_sum=[]
 
-    for CH0,CH1 in zip(CH0_files,CH1_files):
+    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
         CH0_heights=ReadOutput(CH0,"height")
         CH1_heights=ReadOutput(CH1,"height")
         heights=CH0_heights+CH1_heights
-        fwhm=MakeHistgram(heights,bin_num)
-        ene_reso_sum.append(fwhm*para["E"])
+        heights=remove_outliers(heights)
+        fwhm,reso=MakeHistgram(heights,posi)
+        ene_reso_sum.append(reso*para["E"])
 
-    plt.xlabel("Position",fontsize=15)
-    plt.ylabel("Density",fontsize=15)
-    plt.tight_layout()
-    plt.savefig(f"{Data_path}/energy_sum_histgram_{target}.png")
-    plt.show()
-    ene_reso_sum=np.array(ene_reso_sum)
-    np.savetxt(f"{Data_path}/ene_reso_sum_{target}.txt",ene_reso_sum)
-    plt.plot(para["position"],ene_reso_sum)
-    plt.ylim(0,max(ene_reso_sum)+0.1)
-    plt.show()
+    if show:
+        plt.xlabel("Current[A]",fontsize=15)
+        plt.ylabel("Count",fontsize=15)
+        plt.tight_layout()
+        plt.legend()
+        plt.savefig(f"{Data_path}/energy_sum_histgram_{target}.png")
+        plt.show()
+        plt.plot(para["position"],ene_reso_sum)
+        plt.show()
 
     ene_reso_max=[]
 
-    for CH0,CH1 in zip(CH0_files,CH1_files):
+    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
         CH0_heights=ReadOutput(CH0,"height")
         CH1_heights=ReadOutput(CH1,"height")
         heights=np.maximum(CH0_heights,CH1_heights)
-        fwhm=MakeHistgram(heights,bin_num)
-        ene_reso_max.append(fwhm*para["E"])
-
-    plt.xlabel("Position",fontsize=15)
-    plt.ylabel("Density",fontsize=15)
-    plt.tight_layout()
-    plt.savefig(f"{Data_path}/energy_max_histgram_{target}.png")
-    plt.show()
-    ene_reso_max=np.array(ene_reso_max)
-    np.savetxt(f"{Data_path}/ene_reso_max_{target}.txt",ene_reso_max)
-    plt.plot(para["position"],ene_reso_max)
-    plt.ylim(0,max(ene_reso_max)+0.1)
-    plt.show()
+        fwhm,reso=MakeHistgram(heights,posi)
+        ene_reso_max.append(reso*para["E"])
+    if show:
+        plt.xlabel("Current[A]",fontsize=15)
+        plt.ylabel("Count",fontsize=15)
+        plt.tight_layout()
+        #plt.legend()
+        plt.savefig(f"{Data_path}/energy_max_histgram_{target}.png")
+        plt.show()
+        plt.plot(para["position"],ene_reso_max)
+        plt.show()
 
     ene_reso_min=[]
 
-    for CH0,CH1 in zip(CH0_files,CH1_files):
+    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
         CH0_heights=ReadOutput(CH0,"height")
         CH1_heights=ReadOutput(CH1,"height")
         heights=np.minimum(CH0_heights,CH1_heights)
-        fwhm=MakeHistgram(heights,bin_num)
-        ene_reso_min.append(fwhm*para["E"])
+        fwhm,reso=MakeHistgram(heights,posi)
+        ene_reso_min.append(reso*para["E"])
+    if show:
+        plt.xlabel("Current[A]",fontsize=15)
+        plt.ylabel("Count",fontsize=15)
+        plt.tight_layout()
+        #plt.legend()
+        plt.savefig(f"{Data_path}/energy_min_histgram_{target}.png")
+        plt.show()
+        plt.plot(para["position"],ene_reso_min)
+        plt.show()
 
-    plt.xlabel("Position",fontsize=15)
-    plt.ylabel("Density",fontsize=15)
-    plt.tight_layout()
-    plt.savefig(f"{Data_path}/energy_min_histgram_{target}.png")
-    plt.show()
-    ene_reso_min=np.array(ene_reso_min)
-    np.savetxt(f"{Data_path}/ene_reso_min_{target}.txt",ene_reso_min)
-    plt.plot(para["position"],ene_reso_min)
-    plt.ylim(0,max(ene_reso_min)+0.1)
-    plt.show()
+    ene_reso_st=[]
 
-    ene_reso_ch=[]
-
-    for CH0,CH1 in zip(CH0_files,CH1_files):
-        CH0_heights=ReadOutput(CH0,"CheckPoint")
-        CH1_heights=ReadOutput(CH1,"CheckPoint")
+    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
+        CH0_heights=ReadOutput(CH0,"ST_Height")
+        CH1_heights=ReadOutput(CH1,"ST_Height")
         heights=CH0_heights+CH1_heights
-        fwhm=MakeHistgram(heights,bin_num)
-        ene_reso_ch.append(fwhm*para["E"])
+        fwhm,reso=MakeHistgram(heights,posi)
+        ene_reso_st.append(reso*para["E"])
+    if show:
+        plt.xlabel("Current[A]",fontsize=15)
+        plt.ylabel("Count",fontsize=15)
+        plt.tight_layout()
+        #plt.legend()
+        plt.savefig(f"{Data_path}/energy_ch_histgram_{target}.png")
+        plt.show()
+        plt.plot(para["position"],ene_reso_st)
+        plt.show()
 
-    plt.xlabel("Position",fontsize=15)
-    plt.ylabel("Density",fontsize=15)
-    plt.tight_layout()
-    plt.savefig(f"{Data_path}/energy_ch_histgram_{target}.png")
-    plt.show()
-    ene_reso_ch=np.array(ene_reso_ch)
-    np.savetxt(f"{Data_path}/ene_reso_min_{target}.txt",ene_reso_ch)
-    plt.plot(para["position"],ene_reso_ch)
-    plt.ylim(0,max(ene_reso_ch)+0.1)
-    plt.show()
+    data={
+        "Sum":ene_reso_sum,
+        "Max": ene_reso_max,
+        "Min":ene_reso_min,
+        "ST":ene_reso_st
+    }
+
+    index_label=np.array(para["position"])
+    index_label=(index_label-1/2)*para["length"]/para["n_abs"]
+
+    df=pd.DataFrame(data,index=index_label)
+    df.to_csv(f"{Data_path}/ene_resos_{target}.csv")
 
 
-Data_path="d:/hata/phits/662_142_100"
-MakeOutput(Data_path,"Pulse_noise")
-MakeOutput(Data_path,"Pulse_ms")
-MakeOutput(Data_path,"Pulse_ms_noise")
-Resos(Data_path,"Pulse_noise",60)
-Resos(Data_path,"Pulse_ms",60)
-Resos(Data_path,"Pulse_ms_noise",60)
+show=False
+Data_path="f:/hata/662_142_136"
+#MakeOutput(Data_path,"Pulse_noise")
+#MakeOutput(Data_path,"Pulse_ms")
+#MakeOutput(Data_path,"Pulse_ms_noise")
+#Resos(Data_path,"Pulse_noise",show)
+Resos(Data_path,"Pulse_ms",show)
+Resos(Data_path,"Pulse_ms_noise",show)

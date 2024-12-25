@@ -368,6 +368,8 @@ def CheckPulse():
     with open(f'{output}/input.json', "r") as f:
         para = json.load(f)
 
+    
+
     # simulated noise frequency domain
     noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
     noise_samples = len(noise_spe_dens)
@@ -408,6 +410,22 @@ def CheckPulse():
     pulse_noise = pulse + noise_ifft[: int(para["samples"])]
     pulse_noise_fft = sf.fft(pulse_noise,int(para["samples"]))
     pulse_noise_amp = np.abs(pulse_noise_fft)/np.sqrt(df_time)/(int(para["samples"])/np.sqrt(2.))
+
+    cnt = 0
+    for i in para["position"]:
+        data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
+            
+        plt.plot(time * 1e3,data * 1e6,color=cm.hsv((float(cnt)) / float(len(para["position"]))),linewidth=1.5,label="abs" + str(i),)
+        cnt += 1
+    plt.xlabel("Time [ms]", fontsize=20)
+    plt.ylabel("Current [uA]", fontsize=20)
+    plt.xlim(0,10)
+    plt.grid()
+    plt.tight_layout()
+    plt.legend(fontsize=10,loc="best", fancybox=True)
+    plt.savefig(f"{output}/pulse_post.png", dpi=350)
+    plt.show()
+    plt.cla()
 
     # ---- Plot frequency domain ------
     plt.plot(frequency_noise[:int(noise_samples/2)],amp[:int(noise_samples/2)]*1e12,label = "ifft simulated fft (random phase)")

@@ -8,6 +8,7 @@ import natsort
 import glob
 import re
 import tqdm
+import getpara as gp
 
 def ReadOutput(FilePath,key):
     df=pd.read_csv(FilePath)
@@ -19,9 +20,11 @@ def remove_outliers(data, percentile=0.1):
     upper_bound = np.percentile(data, 100 - percentile)
     return data[(data >= lower_bound) & (data <= upper_bound)]
 
-def ReadPulse(Data_path,pulse,path):
+def ReadPulse(Data_path,pulse,path,target):
     with open(f"{Data_path}/input.json") as f:
-        input=json.load(f)
+        para=json.load(f)
+    if target != "Pulse_ms":
+        pulse=gp.BesselFilter(pulse,para["rate"],para["cutoff"])
     try:
         peak = np.max(pulse)
         peak_index = np.argmax(pulse)
@@ -46,9 +49,9 @@ def ReadPulse(Data_path,pulse,path):
         except:
             rise_10=0
 
-        rise = (rise_90 - rise_10) / input["rate"]
+        rise = (rise_90 - rise_10) / para["rate"]
 
-        ST_height = np.mean(pulse[input["SettlingTime"] - 10 : input["SettlingTime"] +90])
+        ST_height = np.mean(pulse[para["SettlingTime"] - 10 : para["SettlingTime"] +90])
 
         return [peak_av,peak_index,rise,ST_height]
     except:
@@ -56,12 +59,15 @@ def ReadPulse(Data_path,pulse,path):
 
 def MakeOutput(Data_path,target):
     with open(f"{Data_path}/input.json") as f:
-        input = json.load(f)
-    for posi in tqdm.tqdm(input["position"]):
+        para = json.load(f)
+
+    if target != "Pulse_ms":
+        print("BesselFilter")
+    for posi in tqdm.tqdm(para["position"]):
         for ch in[0,1]:
             results=[]
             pulse_numbers=[]
-            pulse_pathes = natsort.natsorted(glob.glob(f'{Data_path}/{input["E"]}keV_{posi}/{target}/CH{ch}/CH{ch}_*.dat'))
+            pulse_pathes = natsort.natsorted(glob.glob(f'{Data_path}/{para["E"]}keV_{posi}/{target}/CH{ch}/CH{ch}_*.dat'))
 
             for path in pulse_pathes:
                 pattern = fr'CH{ch}_(\d+).dat'
@@ -69,11 +75,11 @@ def MakeOutput(Data_path,target):
                 pulse_numbers.append(match.group(1))
 
                 pulse=np.loadtxt(path)
-                results.append(ReadPulse(Data_path,pulse,path))
+                results.append(ReadPulse(Data_path,pulse,path,target))
 
             columns=["height","peak_index","rise","ST_Height"]
             df = pd.DataFrame(results,columns=columns,index=pulse_numbers)
-            df.to_csv(f"{Data_path}/{input["E"]}keV_{posi}/{target}/output_TES{ch}.csv")
+            df.to_csv(f"{Data_path}/{para["E"]}keV_{posi}/{target}/output_TES{ch}.csv")
 
 def gaussian(x, amp, mean, stddev):
     return amp * np.exp(-((x - mean) ** 2) / (2 * stddev ** 2))
@@ -104,6 +110,7 @@ def optimal_bin_count(data):
 
 def MakeHistgram(data,posi):
     bin_num = optimal_bin_count(data)
+    #bin_num=30
     hist, bin_edges = np.histogram(data, bins=bin_num, density=False)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # ビンの中心を計算
     initial_guess = [np.max(hist), np.mean(data), np.std(data)]
@@ -118,6 +125,8 @@ def MakeHistgram(data,posi):
       # ヒストグラム
     x_fit = np.linspace(bin_edges[0], bin_edges[-1], 1000)  # フィッティング用のx
     plt.plot(x_fit, gaussian(x_fit, *popt),color="red",alpha=0.5)  # フィッティング曲線
+    #plt.axvline(x=mean_fit)
+    #plt.show()
     return fwhm,fwhm/mean_fit
 
 def Resos(Data_path,target,show):
@@ -175,7 +184,7 @@ def Resos(Data_path,target,show):
         plt.xlabel("Current[A]",fontsize=15)
         plt.ylabel("Count",fontsize=15)
         plt.tight_layout()
-        plt.legend()
+        #plt.legend()
         plt.savefig(f"{Data_path}/energy_sum_histgram_{target}.png")
         plt.show()
         plt.plot(para["position"],ene_reso_sum)
@@ -249,11 +258,13 @@ def Resos(Data_path,target,show):
     df.to_csv(f"{Data_path}/ene_resos_{target}.csv")
 
 
-show=False
-Data_path="f:/hata/662_142_136"
+show=True
+Data_path="F:/hata/662_142_136_300split"
 #MakeOutput(Data_path,"Pulse_noise")
 #MakeOutput(Data_path,"Pulse_ms")
 #MakeOutput(Data_path,"Pulse_ms_noise")
+#MakeOutput(Data_path,"pulse_noise_ms_test")
 #Resos(Data_path,"Pulse_noise",show)
 Resos(Data_path,"Pulse_ms",show)
-Resos(Data_path,"Pulse_ms_noise",show)
+#Resos(Data_path,"Pulse_ms_noise",show)
+#Resos(Data_path,"pulse_noise_ms_test",show)

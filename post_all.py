@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
+1172# -*- coding: utf-8 -*-
 
 # --------last updated 2018/12/01 by kurume-------------------
 
 import math
 import ctypes
-from pprint import pprint
+import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 from numpy import linalg as LA
@@ -12,14 +12,14 @@ import matplotlib.cm as cm
 import pandas as pd
 import json
 import os
+import re
 import glob
+import tqdm
 import random
-import getpara as gp
-from natsort import natsorted
-from scipy.optimize import curve_fit
 import scipy.fftpack as sf
 import scipy.fftpack as fft
 import cmath
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 # --------------------------------------------------------------
 k_b = 1.381 * 1.0e-23  # Boltzmann's constant
@@ -32,7 +32,7 @@ zure = 30
 
 pulse_num=500
 
-output="F:/hata/1172_142_136"
+output="F:/hata/1332_142_136_500split"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -259,7 +259,7 @@ def MakeNoise():
     noise = []
 
     cnt = 0
-    for omg in omega:
+    for omg in tqdm.tqdm(omega):
         M = matrix_M(n_abs, omg)
         noise_out = np.abs(np.linalg.solve(M, N)[0])
         noise.append(noise_out)
@@ -483,42 +483,99 @@ def CheckPulse():
     plt.cla()
 
 def MultiPulse():
+
+    pulse_num=1000
     with open(f"{output}/input.json", "r") as f:
         para = json.load(f)
 
-    def AddPulse(output, para, i, j, noise_samples, noise_spe_dens):
-        os.makedirs(f"{output}/{para['E']}keV_{i}/pulse_noise/CH{j}", exist_ok=True)
-        data = np.loadtxt(f"{output}/{para['E']}keV_{i}/pulse/CH{j}/CH{j}_1.dat")
+    def AddPulse(noise_spe_dens,data):
+        noise_samples=len(noise_spe_dens)
 
-        df = para['rate'] / noise_samples
-        d_length = noise_samples
+        df = 1e6 / noise_samples
 
-        for k in range(pulse_num):
-            cnt = random.randint(1, 10000)
-            noise_spe = random_noise(noise_spe_dens, cnt)
-            ifft_input = noise_spe * np.sqrt(df) * (d_length / np.sqrt(2)) * 2 
-            noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
-            data_n = data + noise_ifft[:len(data)]
-            data_n = gp.BesselFilter(data_n, para['rate'], para["cutoff"])
-            np.savetxt(f"{output}/{para['E']}keV_{i}/pulse_noise/CH{j}/CH{j}_{k}.dat", data_n)
+        cnt = random.randint(1, 10000)
+        noise_spe = random_noise(noise_spe_dens, cnt)
+        ifft_input = noise_spe * np.sqrt(df) * (noise_samples / np.sqrt(2)) * 2 
+        #ifft_input = noise_spe * np.sqrt(df) * (noise_samples)
+        noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
+        data_n = data + noise_ifft[:len(data)]
+        return data_n
+
+    def Process(pulse,output,noise_spe_dens,ch,posi,k,para):
+        noised_pulse=AddPulse(noise_spe_dens,pulse)
+        np.savetxt(f"{output}/{para["E"]}keV_{posi}/pulse_noise/CH{ch}/CH{ch}_{k}.dat",noised_pulse)
 
     noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
-    noise_samples = len(noise_spe_dens)
 
-    for j in [0,1]:
-         with ThreadPoolExecutor(max_workers=11) as executor:
-            futures = [
-                executor.submit(AddPulse, output, para, i, j, noise_samples, noise_spe_dens)
-                for i in para["position"]
-            ]
-            for future in futures:
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Error occurred: {e}")
+    for posi in tqdm.tqdm(para["position"]):
+        noise_path=f"{output}/{para["E"]}keV_{posi}/pulse_noise"
+        if os.path.exists(noise_path):  # ディレクトリが存在するか確認
+            shutil.rmtree(noise_path)
 
-MakePulse()
+        for ch in [0,1]:
+            os.makedirs(f"{output}/{para["E"]}keV_{posi}/pulse_noise/CH{ch}", exist_ok=True)
+            pulse=np.loadtxt(f"{output}/{para["E"]}keV_{posi}/pulse/CH{ch}/CH{ch}_1.dat")
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                # zipでfile_listとnumbersを組み合わせ、process関数を並行して実行
+                futures = [executor.submit(Process, pulse,output,noise_spe_dens,ch,posi,k,para) for k in range(pulse_num)]
+
+                # 結果を待機して処理が終了したら次に進む
+                for future in futures:
+                    future.result()  # 処理結果が必要な場合、ここで結果を取得
+
+def MS_Noise():
+    def AddPulse(noise_spe_dens,data):
+        noise_samples=len(noise_spe_dens)
+
+        df = 1e6 / noise_samples
+
+        cnt = random.randint(1, 10000)
+        noise_spe = random_noise(noise_spe_dens, cnt)
+        ifft_input = noise_spe * np.sqrt(df) * (noise_samples / np.sqrt(2)) * 2 
+        noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
+        data_n = data + noise_ifft[:len(data)]
+        return data_n
+    
+    noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
+
+    def Process(file,output,noise_spe_dens,ch,num,posi,para):
+        pulse=np.loadtxt(file)
+        noised_pulse=AddPulse(noise_spe_dens,pulse)
+        np.savetxt(f"{output}/{para["E"]}keV_{posi}/pulse_noise_ms_test/CH{ch}/CH{ch}_{num}.dat",noised_pulse)
+
+    with open(f"{output}/input.json", "r") as f:
+        para = json.load(f)
+
+    for posi in tqdm.tqdm(para["position"]):
+
+        for ch in [0,1]:
+            os.makedirs(f"{output}/{para["E"]}keV_{posi}/pulse_noise_ms_test/CH{ch}", exist_ok=True)
+
+            file_pattern = f"{output}/{para["E"]}keV_{posi}/pulse_ms/CH{ch}/CH{ch}_*.dat"
+            file_list = glob.glob(file_pattern)
+            numbers = []
+
+            for file in file_list:
+            # ファイル名から数字部分を抽出 (例: CH0_1.dat -> 1)
+                match = re.search(r'CH\d+_(\d+).dat', file)
+                if match:
+                # 数字をリストに追加
+                    numbers.append(int(match.group(1)))
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+            # zipでfile_listとnumbersを組み合わせ、process関数を並行して実行
+                futures = [executor.submit(Process, file, output,noise_spe_dens,ch,number,posi,para) for file, number in zip(file_list, numbers)]
+
+                # 結果を待機して処理が終了したら次に進む
+                for future in futures:
+                    future.result()  # 処理結果が必要な場合、ここで結果を取得
+
+
+
+#MakePulse()
 #FitRatios()
 #MakeNoise()
 #CheckPulse()
 #MultiPulse()
+MS_Noise()

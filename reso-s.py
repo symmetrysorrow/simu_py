@@ -4,6 +4,8 @@ import json
 import pandas as pd
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from scipy.interpolate import UnivariateSpline
 import natsort
 import glob
 import re
@@ -108,26 +110,47 @@ def optimal_bin_count(data):
     bin_count = int(np.ceil((np.max(data) - np.min(data)) / bin_width))  # ビン数
     return max(bin_count, 1)  # ビン数が1未満にならないようにする
 
-def MakeHistgram(data,posi):
+def MakeHistgram(data,posi,HistColor=None):
     bin_num = optimal_bin_count(data)
     #bin_num=30
     hist, bin_edges = np.histogram(data, bins=bin_num, density=False)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # ビンの中心を計算
     initial_guess = [np.max(hist), np.mean(data), np.std(data)]
-
-    plt.hist(data, bins=bin_num, density=False, alpha=0.6, label=f"abs-{posi}")
-
+    if HistColor is not None:
+        plt.hist(data, bins=bin_num, density=False, label=f"abs-{posi}",color=HistColor)
+    else:
+        plt.hist(data, bins=bin_num, density=False, label=f"abs-{posi}")
     # ガウスフィッティング
     popt, pcov = curve_fit(gaussian, bin_centers, hist, p0=initial_guess, maxfev=10000000)
     amp_fit, mean_fit, stddev_fit = popt
     fwhm = 2 * stddev_fit * np.sqrt(2 * np.log(2))
 
-      # ヒストグラム
+    #ヒストグラム
     x_fit = np.linspace(bin_edges[0], bin_edges[-1], 1000)  # フィッティング用のx
     plt.plot(x_fit, gaussian(x_fit, *popt),color="red",alpha=0.5)  # フィッティング曲線
+
     #plt.axvline(x=mean_fit)
     #plt.show()
     return fwhm,fwhm/mean_fit
+
+def generate_symmetric_colors(n):
+    # 色相を0から1の範囲で分布させる（広い色相範囲で）
+    half_n = n // 2  # n//2 で配列の半分を計算
+    hues = np.linspace(0.1, 0.9, half_n)  # 色相範囲を広げる（赤から紫まで）
+    hues = np.concatenate([hues, hues[::-1]])  # 左右対称にする
+
+    # 奇数の場合、中央の色を赤色（hues[half_n]）に設定
+    if n % 2 != 0:
+        hues = np.concatenate([hues[:half_n], [0.0], hues[half_n:]])  # 中央を赤に
+
+    # 彩度と明度を一定に保つ（高彩度と高明度で明るく）
+    saturation = 1.0
+    value = 1.0
+    
+    # HSVからRGBに変換
+    colors = [mcolors.hsv_to_rgb((h, saturation, value)) for h in hues]
+    
+    return np.array(colors)
 
 def Resos(Data_path,target,show):
     fit_para_path=f"{Data_path}/ratios.txt"
@@ -145,6 +168,15 @@ def Resos(Data_path,target,show):
 
     fwhms=[]
 
+    ratio_base = fit_para[:, 1]
+    posi_base = fit_para[:, 0]
+
+    sorted_indices = np.argsort(ratio_base)
+    ratio_base = ratio_base[sorted_indices]
+    posi_base = posi_base[sorted_indices]
+
+    spline = UnivariateSpline(ratio_base, posi_base, k=3, s=0)
+
     for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
         CH0_heights=ReadOutput(CH0,"height")
         CH1_heights=ReadOutput(CH1,"height")
@@ -152,6 +184,8 @@ def Resos(Data_path,target,show):
         ratios=CH0_heights/CH1_heights
 
         positions=find_nearest_values(ratios,fit_para)
+
+        positions=spline(ratios)
         #positions=remove_outliers(positions)
         
         fwhm,reso=MakeHistgram(positions,posi)
@@ -160,106 +194,48 @@ def Resos(Data_path,target,show):
     fwhms=np.array(fwhms)
     np.savetxt(f"{Data_path}/fwhms_{target}.txt",fwhms)
 
+    
+    
+    plt.xlabel("Position",fontsize=15)
+    plt.ylabel("Count",fontsize=15)
+    plt.title(f"{para["E"]}keV")
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(f"{Data_path}/position_histgram_{target}_{para["E"]}.png")
     if show:
-        plt.xlabel("Position",fontsize=15)
-        plt.ylabel("Count",fontsize=15)
-        plt.tight_layout()
-        #plt.legend()
-        plt.savefig(f"{Data_path}/position_histgram_{target}.png")
         plt.show()
         plt.plot(para["position"],fwhms)
         plt.show()
+    else:
+        plt.clf()
 
-    ene_reso_sum=[]
+    coeffs = np.polyfit(ratio_base, posi_base, 15)
+    poly_func = np.poly1d(coeffs)  # 15次多項式関数を作成
 
-    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
-        CH0_heights=ReadOutput(CH0,"height")
-        CH1_heights=ReadOutput(CH1,"height")
-        heights=CH0_heights+CH1_heights
-        heights=remove_outliers(heights)
-        fwhm,reso=MakeHistgram(heights,posi)
-        ene_reso_sum.append(reso*para["E"])
-
-    if show:
-        plt.xlabel("Current[A]",fontsize=15)
-        plt.ylabel("Count",fontsize=15)
-        plt.tight_layout()
-        #plt.legend()
-        plt.savefig(f"{Data_path}/energy_sum_histgram_{target}.png")
-        plt.show()
-        plt.plot(para["position"],ene_reso_sum)
-        plt.show()
-
-    ene_reso_max=[]
+    fwhms=[]
 
     for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
         CH0_heights=ReadOutput(CH0,"height")
         CH1_heights=ReadOutput(CH1,"height")
-        heights=np.maximum(CH0_heights,CH1_heights)
-        fwhm,reso=MakeHistgram(heights,posi)
-        ene_reso_max.append(reso*para["E"])
+        
+        ratios=CH0_heights/CH1_heights
+
+        positions = poly_func(ratios)
+        
+        fwhm,reso=MakeHistgram(positions,posi)
+        fwhms.append(fwhm)
+
+    fwhms=np.array(fwhms)
+    np.savetxt(f"{Data_path}/fwhms_{target}_15.txt",fwhms)
+
     if show:
-        plt.xlabel("Current[A]",fontsize=15)
-        plt.ylabel("Count",fontsize=15)
-        plt.tight_layout()
-        #plt.legend()
-        plt.savefig(f"{Data_path}/energy_max_histgram_{target}.png")
-        plt.show()
-        plt.plot(para["position"],ene_reso_max)
+        plt.cla()
+        plt.plot(para["position"],fwhms)
         plt.show()
 
-    ene_reso_min=[]
 
-    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
-        CH0_heights=ReadOutput(CH0,"height")
-        CH1_heights=ReadOutput(CH1,"height")
-        heights=np.minimum(CH0_heights,CH1_heights)
-        fwhm,reso=MakeHistgram(heights,posi)
-        ene_reso_min.append(reso*para["E"])
-    if show:
-        plt.xlabel("Current[A]",fontsize=15)
-        plt.ylabel("Count",fontsize=15)
-        plt.tight_layout()
-        #plt.legend()
-        plt.savefig(f"{Data_path}/energy_min_histgram_{target}.png")
-        plt.show()
-        plt.plot(para["position"],ene_reso_min)
-        plt.show()
-
-    ene_reso_st=[]
-
-    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
-        CH0_heights=ReadOutput(CH0,"ST_Height")
-        CH1_heights=ReadOutput(CH1,"ST_Height")
-        heights=CH0_heights+CH1_heights
-        fwhm,reso=MakeHistgram(heights,posi)
-        ene_reso_st.append(reso*para["E"])
-    if show:
-        plt.xlabel("Current[A]",fontsize=15)
-        plt.ylabel("Count",fontsize=15)
-        plt.tight_layout()
-        #plt.legend()
-        plt.savefig(f"{Data_path}/energy_ch_histgram_{target}.png")
-        plt.show()
-        plt.plot(para["position"],ene_reso_st)
-        plt.show()
-
-    data={
-        "Sum":ene_reso_sum,
-        "Max": ene_reso_max,
-        "Min":ene_reso_min,
-        "ST":ene_reso_st
-    }
-
-    index_label=np.array(para["position"])
-    index_label=(index_label-1/2)*para["length"]/para["n_abs"]
-
-    df=pd.DataFrame(data,index=index_label)
-    df.to_csv(f"{Data_path}/ene_resos_{target}.csv")
-
-
-show=True
-Data_path="F:/hata/662_142_136_300split"
+show=False
+Data_path="F:/hata/1332_142_136_300split"
 #MakeOutput(Data_path,"Pulse_noise")
 #MakeOutput(Data_path,"Pulse_ms")
 #MakeOutput(Data_path,"Pulse_ms_noise")

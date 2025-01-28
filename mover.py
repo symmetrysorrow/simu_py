@@ -20,6 +20,6 @@ def move_dumpall_files(source_root, target_root):
             print(f"Moved {source_file} to {target_file}")
 
 # 使用例
-source_root = "F:/hata/1172_142_136"
-target_root = "F:/hata/1172_142_136_300split"
+source_root = "F:/hata/1332_142_100"
+target_root = "F:/hata/1332_120_100"
 move_dumpall_files(source_root, target_root)

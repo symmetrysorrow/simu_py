@@ -32,7 +32,7 @@ zure = 30
 
 pulse_num=500
 
-output="F:/hata/1332_142_136_500split"
+output="F:/hata/1332_11split"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -364,11 +364,26 @@ def MakeNoise():
     plt.show()
     plt.cla()
 
+def SaveNoise():
+    def Noise(noise_spe_dens):
+        noise_samples=len(noise_spe_dens)
+
+        df = 1e6 / noise_samples
+
+        cnt = random.randint(1, 10000)
+        noise_spe = random_noise(noise_spe_dens, cnt)
+        ifft_input = noise_spe * np.sqrt(df) * (noise_samples / np.sqrt(2)) * 2 
+        noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
+        return noise_ifft
+    
+    noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
+
+    np.savetxt(f"{output}/Noise_time_domain.dat",Noise(noise_spe_dens))
+
+
 def CheckPulse():
     with open(f'{output}/input.json', "r") as f:
         para = json.load(f)
-
-    
 
     # simulated noise frequency domain
     noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
@@ -411,6 +426,7 @@ def CheckPulse():
     pulse_noise_fft = sf.fft(pulse_noise,int(para["samples"]))
     pulse_noise_amp = np.abs(pulse_noise_fft)/np.sqrt(df_time)/(int(para["samples"])/np.sqrt(2.))
 
+    # --- Pulse time domain
     cnt = 0
     for i in para["position"]:
         data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
@@ -420,12 +436,13 @@ def CheckPulse():
     plt.xlabel("Time [ms]", fontsize=20)
     plt.ylabel("Current [uA]", fontsize=20)
     plt.xlim(0,10)
+    #plt.ylim(0,2)
     plt.grid()
     plt.tight_layout()
     plt.legend(fontsize=10,loc="best", fancybox=True)
     plt.savefig(f"{output}/pulse_post.png", dpi=350)
     plt.show()
-    plt.cla()
+    plt.clf()
 
     # ---- Plot frequency domain ------
     plt.plot(frequency_noise[:int(noise_samples/2)],amp[:int(noise_samples/2)]*1e12,label = "ifft simulated fft (random phase)")
@@ -439,7 +456,7 @@ def CheckPulse():
     plt.tight_layout()
     plt.savefig(f"{output}/noise_spectra.png", dpi=350)
     plt.show()
-    plt.cla()
+    plt.clf()
 
     # ---- noise time domain --------
     plt.plot(time * 1e3,noise_ifft[:int(para['samples'])] * 1e6,linewidth=1.5)
@@ -450,7 +467,7 @@ def CheckPulse():
     #plt.legend(fontsize=12, loc='upper right')
     plt.savefig(f"{output}/noise_post.png", dpi=350)
     plt.show()
-    plt.cla()
+    plt.clf()
 
     # ---- pulse with noise time domain -------
 
@@ -464,7 +481,6 @@ def CheckPulse():
         # simulated noise time domain
         noise_ifft= np.fft.ifft(ifft_input, noise_samples).real
 
-            
         data += noise_ifft[: int(para["samples"])]
         #data = gp.BesselFilter(data,para['rate'],para['cutoff'])
             
@@ -478,7 +494,7 @@ def CheckPulse():
     plt.legend(fontsize=10,loc="best", fancybox=True)
     plt.savefig(f"{output}/pulse_noise_post.png", dpi=350)
     plt.show()
-    plt.cla()
+    plt.clf()
         
         
     # ---- pulse with noise frequencyx domain -------
@@ -498,11 +514,11 @@ def CheckPulse():
     plt.legend(fontsize=10,loc="best", fancybox=True)
     plt.savefig(f"{output}/pulse_noise_spectra.png", dpi=350)
     plt.show()
-    plt.cla()
+    plt.clf()
 
 def MultiPulse():
 
-    pulse_num=1000
+    pulse_num=500
     with open(f"{output}/input.json", "r") as f:
         para = json.load(f)
 
@@ -540,7 +556,10 @@ def MultiPulse():
 
                 # 結果を待機して処理が終了したら次に進む
                 for future in futures:
-                    future.result()  # 処理結果が必要な場合、ここで結果を取得
+                    try:
+                        future.result()  # 処理結果が必要な場合、ここで結果を取得
+                    except Exception as e:
+                        print(f"error:{e}")
 
 def MS_Noise():
     def AddPulse(noise_spe_dens,data):
@@ -589,11 +608,10 @@ def MS_Noise():
                 for future in futures:
                     future.result()  # 処理結果が必要な場合、ここで結果を取得
 
-
-
 #MakePulse()
 #FitRatios()
-#MakeNoise()
+MakeNoise()
+#SaveNoise()
 #CheckPulse()
 #MultiPulse()
-MS_Noise()
+#MS_Noise()

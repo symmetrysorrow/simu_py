@@ -10,21 +10,24 @@ def GetFFT(data,rate,sample):
     frequencies_shifted = np.fft.fftshift(frequencies)
     return g_f_shifted,frequencies_shifted
 def GetIFFT(data,rate):
-    g_ifft=np.fft.ifft(data)*fs
+    g_ifft=np.fft.ifft(data)*rate
     return g_ifft
 
 fs = 1e6  # サンプリング周波数 (Hz)
 N=1e6
 t = np.linspace(0, 1, int(fs), endpoint=False)  # 時間軸
+# ----データの読み込み----
 M_t=np.loadtxt("f:/hata/1332_adaptive/1332keV_17/Pulse/CH0/CH0_1.dat")
 N_t=np.loadtxt("f:/hata/1332_adaptive/noise_time_domain.dat")
+# ----データの読み込み----
 padded_data = np.pad(M_t, (10000, 0), mode='constant')  # 先頭に0を追加
 M_t = padded_data[:-10000]  # 最後のn個を削除
 D_t=M_t+N_t
-# フーリエ変換
+# ----フーリエ変換----
 M_f,frequencies = GetFFT(M_t,fs,N)
 N_f,frequencies=GetFFT(N_t,fs,N)
 D_f,frequencies=GetFFT(D_t,fs,N)
+# ----フーリエ変換----
 ratio_squared = np.abs(M_f / N_f)**2
 
 # 時間領域でのエネルギー計算

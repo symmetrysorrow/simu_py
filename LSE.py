@@ -2,26 +2,20 @@ import json
 import ctypes
 import numpy as np
 from scipy.optimize import minimize
+import pulse_model
 
-output = "output"
+output = "f:/hata/average_pulse/pulses"
 
 eta = 101
 amp = 10
 
 def MakePulse(para):   
-    makepulse_dll = ctypes.CDLL('./MakePulse.dll')
-
-    makepulse_dll.MakePulse.argtypes = [ctypes.c_char_p]
-    makepulse_dll.MakePulse.restype = None
-
-    input_string = f"{output}"
-    makepulse_dll.MakePulse(input_string.encode('utf-8'))
+    ch0,ch1=pulse_model.model(para)
 
     pulses = []
 
-    for i in para['position']:
-        data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
-        pulses.append(data)
+    for i in range(len(para["position"])):
+        pulses.appen(ch0[i])
 
     return pulses
 
@@ -38,9 +32,8 @@ with open(f"{output}/input.json", "r") as f:
 ExperimentalData=[]
 
 cnt=1
-for i in para["position"]:  
-    #data  = np.loadtxt(f"output/averagepulses/average_pulse_{cnt}.txt")/amp*eta
-    data =  np.loadtxt(f"E:/tagawa/exp_py/average_pulse-block_{cnt}.dat")/amp*eta
+for i in range(1,8):  
+    data =  np.loadtxt(f"f:/hata/average_pulse/average_pulse-block_{cnt}.dat")/amp*eta
     data = data[5000:10000]
     ExperimentalData.append(data)
     cnt+=1
@@ -62,7 +55,7 @@ def err_func(params):
         json.dump(para, f)
     pulses = MakePulse(para)
     err = 0
-    for i in range(len(pulses)):
+    for i in range(len(ExperimentalData)):
         err += np.sum((pulses[i] - ExperimentalData[i])**2)
 
     return err

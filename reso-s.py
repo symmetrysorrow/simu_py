@@ -11,9 +11,17 @@ import glob
 import re
 import tqdm
 import getpara as gp
+import warnings
+import os
 
-def ReadOutput(FilePath,key):
+warnings.filterwarnings('error')
+
+def ReadOutput(FilePath,key,filter_path=None):
     df=pd.read_csv(FilePath)
+    if filter_path is not None:
+        if os.path.exists(filter_path):
+            filter=np.loadtxt(filter_path)
+            df = df[df['id'].isin(filter)]
     data = df[key].to_numpy()
     return data
 
@@ -25,6 +33,7 @@ def remove_outliers(data, percentile=0.1):
 def ReadPulse(Data_path,pulse,path,target):
     with open(f"{Data_path}/input.json") as f:
         para=json.load(f)
+    pulse*=-1
     if target != "Pulse_ms":
         pulse=gp.BesselFilter(pulse,para["rate"],para["cutoff"])
     try:
@@ -58,6 +67,55 @@ def ReadPulse(Data_path,pulse,path,target):
         return [peak_av,peak_index,rise,ST_height]
     except:
         print(path)
+        return None
+
+def LookPulse(Data_path,target,selected=None):
+    with open(f"{Data_path}/input.json") as f:
+        para = json.load(f)
+    if not selected:
+        pulse_path = natsort.natsorted(glob.glob(f'{Data_path}/{para["E"]}keV_{para["position"][0]}/{target}/CH0/CH0_*.dat'))[0]
+    else:
+        pulse_path=f'{Data_path}/{para["E"]}keV_{para["position"][0]}/{target}/CH0/CH0_{selected}.dat'
+    pulse=np.loadtxt(pulse_path)
+    pulse=gp.BesselFilter(pulse,para["rate"],para["cutoff"])
+    pulse*=-1
+    time=np.arange(para["samples"])*(1/para["rate"])
+    plt.plot(time,pulse,label="Pulse")
+    try:
+        peak = np.max(pulse)
+        peak_index = np.argmax(pulse)
+
+        # y軸の範囲を取得
+        ymin, ymax = plt.ylim()
+
+        # x=1からx=3まで、y軸全体を塗りつぶす
+        plt.fill_betweenx([ymin, ymax], x1=time[peak_index - 10], x2=time[peak_index +90], color='lightblue', alpha=0.5)
+
+        for i in reversed(range(0, peak_index)):
+            if pulse[i] <= peak * 0.9:
+                rise_90 = i
+                break
+
+        try:
+            rise_90+=0
+        except:
+            rise_90=0
+        for j in reversed(range(0, rise_90)):
+            if pulse[j] <= peak * 0.1:
+                rise_10 = j
+                break
+
+        try:
+            rise_10+=0
+        except:
+            rise_10=0
+
+        plt.fill_betweenx([ymin, ymax], x1=time[rise_10], x2=time[rise_90], color='lightgreen', alpha=0.5)
+
+    except:
+        print("Err")
+    plt.show()
+
 
 def MakeOutput(Data_path,target):
     with open(f"{Data_path}/input.json") as f:
@@ -74,13 +132,14 @@ def MakeOutput(Data_path,target):
             for path in pulse_pathes:
                 pattern = fr'CH{ch}_(\d+).dat'
                 match = re.search(pattern, path)
-                pulse_numbers.append(match.group(1))
-
                 pulse=np.loadtxt(path)
-                results.append(ReadPulse(Data_path,pulse,path,target))
+                result=ReadPulse(Data_path,pulse,path,target)
+                if result is not None:
+                    result=[match.group(1)]+result
+                    results.append(result)
 
-            columns=["height","peak_index","rise","ST_Height"]
-            df = pd.DataFrame(results,columns=columns,index=pulse_numbers)
+            columns=["id","height","peak_index","rise","ST_Height"]
+            df = pd.DataFrame(results,columns=columns)
             df.to_csv(f"{Data_path}/{para["E"]}keV_{posi}/{target}/output_TES{ch}.csv")
 
 def gaussian(x, amp, mean, stddev):
@@ -110,28 +169,66 @@ def optimal_bin_count(data):
     bin_count = int(np.ceil((np.max(data) - np.min(data)) / bin_width))  # ビン数
     return max(bin_count, 1)  # ビン数が1未満にならないようにする
 
-def MakeHistgram(data,posi,HistColor=None):
+def MakeHistgram_without_plot(data,posi,HistColor=None):
     bin_num = optimal_bin_count(data)
-    #bin_num=30
     hist, bin_edges = np.histogram(data, bins=bin_num, density=False)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # ビンの中心を計算
     initial_guess = [np.max(hist), np.mean(data), np.std(data)]
-    if HistColor is not None:
-        plt.hist(data, bins=bin_num, density=False, label=f"abs-{posi}",color=HistColor)
-    else:
-        plt.hist(data, bins=bin_num, density=False, label=f"abs-{posi}")
-    # ガウスフィッティング
-    popt, pcov = curve_fit(gaussian, bin_centers, hist, p0=initial_guess, maxfev=10000000)
+
+    # ガウスフィッティング（標準偏差が負にならないよう制約を加える）
+    try:
+        popt, _ = curve_fit(
+            gaussian, bin_centers, hist, p0=initial_guess, maxfev=1000000,
+            bounds=([0, min(data), 0], [np.inf, max(data), np.inf])  # 標準偏差の下限を0に制限
+        )
+    except RuntimeError:
+        print(f"Warning: Gaussian fitting failed for posi {posi}")
+        return None, None  # フィッティング失敗時の処理
+
     amp_fit, mean_fit, stddev_fit = popt
     fwhm = 2 * stddev_fit * np.sqrt(2 * np.log(2))
 
-    #ヒストグラム
-    x_fit = np.linspace(bin_edges[0], bin_edges[-1], 1000)  # フィッティング用のx
-    plt.plot(x_fit, gaussian(x_fit, *popt),color="red",alpha=0.5)  # フィッティング曲線
+    # 標準偏差が0に近すぎる場合、FWHMの計算が不安定になるためチェック
+    if stddev_fit <= 0:
+        print(f"Warning: Invalid standard deviation ({stddev_fit}) for posi {posi}")
+        return None, None  # 異常値を回避
 
-    #plt.axvline(x=mean_fit)
-    #plt.show()
-    return fwhm,fwhm/mean_fit
+    return fwhm, fwhm / mean_fit
+
+def MakeHistgram(data, posi, HistColor=None):
+    bin_num = optimal_bin_count(data)
+    hist, bin_edges = np.histogram(data, bins=bin_num, density=False)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # ビンの中心を計算
+    initial_guess = [np.max(hist), np.mean(data), np.std(data)]
+
+    if HistColor is not None:
+        plt.hist(data, bins=bin_num, density=False, label=f"abs-{posi}", color=HistColor)
+    else:
+        plt.hist(data, bins=bin_num, density=False, label=f"abs-{posi}")
+
+    # ガウスフィッティング（標準偏差が負にならないよう制約を加える）
+    try:
+        popt, _ = curve_fit(
+            gaussian, bin_centers, hist, p0=initial_guess, maxfev=1000000,
+            bounds=([0, min(data), 0], [np.inf, max(data), np.inf])  # 標準偏差の下限を0に制限
+        )
+    except RuntimeError:
+        print(f"Warning: Gaussian fitting failed for posi {posi}")
+        return None, None  # フィッティング失敗時の処理
+
+    amp_fit, mean_fit, stddev_fit = popt
+    fwhm = 2 * stddev_fit * np.sqrt(2 * np.log(2))
+
+    # 標準偏差が0に近すぎる場合、FWHMの計算が不安定になるためチェック
+    if stddev_fit <= 0:
+        print(f"Warning: Invalid standard deviation ({stddev_fit}) for posi {posi}")
+        return None, None  # 異常値を回避
+
+    # フィッティング曲線の描画
+    x_fit = np.linspace(bin_edges[0], bin_edges[-1], 1000)
+    plt.plot(x_fit, gaussian(x_fit, *popt), color="red", alpha=0.5)
+
+    return fwhm, fwhm / mean_fit
 
 def generate_symmetric_colors(n):
     # 色相を0から1の範囲で分布させる（広い色相範囲で）
@@ -152,95 +249,124 @@ def generate_symmetric_colors(n):
     
     return np.array(colors)
 
-def Resos(Data_path,target,show):
-    fit_para_path=f"{Data_path}/ratios.txt"
-    fit_para=np.loadtxt(fit_para_path, delimiter=',')
 
-    with open(f"{Data_path}/input.json","r") as f:
-        para=json.load(f)
 
-    CH0_files=[]
-    CH1_files=[]
+def Resos(Data_path, target, show):
+    fit_para_path = f"{Data_path}/ratios.txt"
+    fit_para = np.loadtxt(fit_para_path, delimiter=',')
+    with open(f"{Data_path}/input.json", "r") as f:
+        para = json.load(f)
 
-    for posi in para["position"]:
-        CH0_files.append(f"{Data_path}/{para['E']}keV_{posi}/{target}/output_TES0.csv")
-        CH1_files.append(f"{Data_path}/{para['E']}keV_{posi}/{target}/output_TES1.csv")
+    CH0_files = [f"{Data_path}/{para['E']}keV_{posi}/{target}/output_TES0.csv" for posi in para["position"]]
+    CH1_files = [f"{Data_path}/{para['E']}keV_{posi}/{target}/output_TES1.csv" for posi in para["position"]]
 
-    fwhms=[]
-
-    ratio_base = fit_para[:, 1]
-    posi_base = fit_para[:, 0]
-
+    # spline 準備
+    ratio_base, posi_base = fit_para[:,1], fit_para[:,0]
     sorted_indices = np.argsort(ratio_base)
-    ratio_base = ratio_base[sorted_indices]
-    posi_base = posi_base[sorted_indices]
+    spline = UnivariateSpline(ratio_base[sorted_indices], posi_base[sorted_indices], k=3, s=0)
 
-    spline = UnivariateSpline(ratio_base, posi_base, k=3, s=0)
-
-    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
-        CH0_heights=ReadOutput(CH0,"height")
-        CH1_heights=ReadOutput(CH1,"height")
-        
-        ratios=CH0_heights/CH1_heights
-
-        positions=find_nearest_values(ratios,fit_para)
-
-        positions=spline(ratios)
-        #positions=remove_outliers(positions)
-        
-        fwhm,reso=MakeHistgram(positions,posi)
+    colors = generate_symmetric_colors(len(para["position"]))
+    
+    # ----------------------------------------------------
+    # ⭐ データを最初にまとめて読み込み
+    all_data = []
+    for CH0, CH1, posi in zip(CH0_files, CH1_files, para["position"]):
+        selected_ids_path = f"{Data_path}/{para['E']}keV_{posi}/{target}/selected_ids.txt"
+        data = {
+            "posi": posi,
+            "CH0_height": ReadOutput(CH0, "height", selected_ids_path),
+            "CH1_height": ReadOutput(CH1, "height", selected_ids_path),
+            "CH0_st": ReadOutput(CH0, "ST_Height", selected_ids_path),
+            "CH1_st": ReadOutput(CH1, "ST_Height", selected_ids_path),
+        }
+        all_data.append(data)
+    # ----------------------------------------------------
+    # 位置推定ヒストグラム
+    fwhms = []
+    for data in all_data:
+        ratios = data["CH0_height"] / data["CH1_height"]
+        positions = spline(ratios)
+        fwhm, _ = MakeHistgram(positions, data["posi"])
         fwhms.append(fwhm)
 
-    fwhms=np.array(fwhms)
-    np.savetxt(f"{Data_path}/fwhms_{target}.txt",fwhms)
-
-    
-    
-    plt.xlabel("Position",fontsize=15)
-    plt.ylabel("Count",fontsize=15)
-    plt.title(f"{para["E"]}keV")
+    np.savetxt(f"{Data_path}/fwhms_{target}.txt", fwhms)
+    plt.xlabel("Position", fontsize=15)
+    plt.ylabel("Count", fontsize=15)
+    plt.title(f"{para['E']}keV")
     plt.tight_layout()
     plt.legend()
-    plt.savefig(f"{Data_path}/position_histgram_{target}_{para["E"]}.png")
+    plt.savefig(f"{Data_path}/position_histgram_{target}_{para['E']}.png")
     if show:
         plt.show()
-        plt.plot(para["position"],fwhms)
+        plt.plot(para["position"], fwhms)
         plt.show()
     else:
         plt.clf()
 
-    coeffs = np.polyfit(ratio_base, posi_base, 15)
-    poly_func = np.poly1d(coeffs)  # 15次多項式関数を作成
+    # ----------------------------------------------------
+    # Sum / Max / Min （すべて height で計算）
+    
+    results = {}
 
-    fwhms=[]
+    for mode_name, combine_func in [("Sum", lambda c0, c1: c0 + c1),
+                                    ("Max", lambda c0, c1: np.maximum(c0, c1)),
+                                    ("Min", lambda c0, c1: np.minimum(c0, c1))]:
+        ene_reso_list = []
+        for data, color in zip(all_data, colors):
+            heights = combine_func(data["CH0_height"], data["CH1_height"])
+            fwhm, reso = MakeHistgram(heights, data["posi"], color)
+            ene_reso_list.append(reso * para["E"])
+        results[mode_name] = ene_reso_list
 
-    for CH0,CH1,posi in zip(CH0_files,CH1_files,para["position"]):
-        CH0_heights=ReadOutput(CH0,"height")
-        CH1_heights=ReadOutput(CH1,"height")
-        
-        ratios=CH0_heights/CH1_heights
+        plt.xlabel("Current[A]", fontsize=15)
+        plt.ylabel("Count", fontsize=15)
+        plt.tight_layout()
+        plt.legend(labelspacing=0, fontsize=8, markerscale=0.5)
+        plt.savefig(f"{Data_path}/energy_{mode_name.lower()}_histgram_{target}_{para['E']}.png")
+        if show:
+            plt.show()
+            plt.plot(para["position"], ene_reso_list)
+            plt.show()
+        else:
+            plt.clf()
 
-        positions = poly_func(ratios)
-        
-        fwhm,reso=MakeHistgram(positions,posi)
-        fwhms.append(fwhm)
+    # ----------------------------------------------------
+    # ST_Height（別枠で）
+    ene_reso_st = []
+    for data, color in zip(all_data, colors):
+        heights = data["CH0_st"] + data["CH1_st"]
+        fwhm, reso = MakeHistgram_without_plot(heights, data["posi"], color)
+        ene_reso_st.append(reso * para["E"])
+    results["ST"] = ene_reso_st
 
-    fwhms=np.array(fwhms)
-    np.savetxt(f"{Data_path}/fwhms_{target}_15.txt",fwhms)
+    if False:
+        plt.xlabel("Current[A]", fontsize=15)
+        plt.ylabel("Count", fontsize=15)
+        plt.tight_layout()
+        plt.legend(labelspacing=0, fontsize=8, markerscale=0.5)
+        plt.savefig(f"{Data_path}/energy_st_histgram_{target}_{para['E']}.png")
+        if show:
+            plt.show()
+            plt.plot(para["position"], ene_reso_st)
+            plt.show()
+        else:
+            plt.clf()
 
-    if show:
-        plt.cla()
-        plt.plot(para["position"],fwhms)
-        plt.show()
+    # ----------------------------------------------------
+    # CSV 出力
+    index_label = (np.array(para["position"]) - 0.5) * para["length"] / para["n_abs"]
+    df = pd.DataFrame(results, index=index_label)
+    df.to_csv(f"{Data_path}/ene_resos_{target}.csv")
 
 
 show=False
-Data_path="F:/hata/1332_142_136_300split"
+Data_path="H:/hata2025/1332_120_100"
+#LookPulse(Data_path,"Pulse_ms",selected=209809)
 #MakeOutput(Data_path,"Pulse_noise")
 #MakeOutput(Data_path,"Pulse_ms")
 #MakeOutput(Data_path,"Pulse_ms_noise")
 #MakeOutput(Data_path,"pulse_noise_ms_test")
-#Resos(Data_path,"Pulse_noise",show)
+#Resos(Data_path,"Pulse_noise",True)
 Resos(Data_path,"Pulse_ms",show)
 #Resos(Data_path,"Pulse_ms_noise",show)
 #Resos(Data_path,"pulse_noise_ms_test",show)

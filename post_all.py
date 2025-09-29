@@ -72,7 +72,7 @@ def FitRatios():
     Ratios_dll.MakePulse(input_string.encode('utf-8'))
 
 def MakeNoise():
-    # add omega at diagonal
+        # add omega at diagonal
     def add_omega(M, n_abs, omega):
         omega_list = np.full(n_abs + 4, omega * 1.0j, dtype=np.complex128)
         omega_diag = np.diag(omega_list)
@@ -80,13 +80,10 @@ def MakeNoise():
     
     with open (f"{output}/input.json", "r") as f:
         para = json.load(f)
-    
     n_abs = para["n_abs"]  # absorber pixel
-    C_abs = para["C_abs"] / n_abs  # heat capacity per 1-pixel
+    C_abs = para["C_abs"]# heat capacity per 1-pixel
     C_tes = para["C_tes"]  # heat capacity (TES)
-    G_abs_abs = float(para["G_abs-abs"]) * (
-        n_abs - 1
-    )  # thermal conductivity per 1-block
+    G_abs_abs = float(para["G_abs-abs"])
     G_abs_tes = para["G_abs-tes"]  # thermal conductivity (absorber-TES)
     G_tes_bath = para["G_tes-bath"]  # thermal conductivity (TES-bath)
     R = para["R"]  # R_TES
@@ -100,14 +97,13 @@ def MakeNoise():
     E = para["E"]  # energy
     length = para["length"]  # length
     rate = int(para["rate"])  # sample rate
-    samples = int(para["noise_samples"])  # samples
+    samples = int(para["samples"])  # samples
     para["output"] = output
 
     time = np.linspace(0, samples / rate, samples)
     frequency = np.arange(0, rate, rate / samples)
 
     I = np.sqrt((G_tes_bath * T_c * (1 - ((T_bath / T_c) ** n))) / (n * R))  # I_tes
-    print(f"I:{I}")
 
     t_el = L / (R_l + R * (1 + b))  # tau_electron
     L_I = (a * (I**2) * R) / (G_tes_bath * T_c)  # Loop gain
@@ -131,150 +127,77 @@ def MakeNoise():
 
     # noise sources matrix N
     def matrix_N(n_abs):
-        X = np.zeros((n_abs + 7, n_abs + 4), dtype=np.complex128)  # initialize matrix
-        for i in range(n_abs + 7):
-            if i == 0:  # johnson Noise (TES1)
-                for j in range(n_abs + 4):
-                    if j == 0:
-                        X[i, j] = -enj / L
-                    elif j == 1:
-                        X[i, j] = I * enj / C_tes
+        X = np.zeros((5, 9), dtype=np.complex128)  # initialize matrix
+        X[0,0] = -enj / L#
+        X[0,1] = enj_R / L#
 
-            elif i == 1:  # johnson Noise (Load1)
-                for j in range(n_abs + 4):
-                    if j == 0:
-                        X[i, j] = enj_R / L
-                        break
+        X[1,0] = I * enj / C_tes#
+        X[1, 2] = ptfn_tes_bath / C_tes#
+        X[1, 3] = ptfn_abs_tes / C_tes#
+        X[1,4]=ptfn_abs_abs/C_tes
 
-            elif i == 2:  # Phonon Noise (TES1-Bath)
-                for j in range(n_abs + 4):
-                    if j == 1:
-                        X[i, j] = ptfn_tes_bath / C_tes
-                        break
+        X[2,4]=-ptfn_abs_tes/C_abs#
+        X[2,5]=-2*ptfn_abs_abs/C_abs
+        X[2,6]=-ptfn_abs_tes/C_abs#
 
-            elif i == 3:  # Phonon Noise (TES1-Absorber)
-                for j in range(n_abs + 4):
-                    if j == 1:
-                        X[i, j] = ptfn_abs_tes / C_tes
-                    elif j == 2:
-                        X[i, j] = -ptfn_abs_tes / C_abs
+        X[3,4]=ptfn_abs_abs/C_tes
+        X[3, 5] =ptfn_abs_tes / C_tes#
+        X[3, 6] = ptfn_tes_bath / C_tes#
+        X[3,8]=I * enj / C_tes#
 
-            elif i == n_abs + 3:  # Phonon Noise (TES2-Absorber)
-                for j in range(n_abs + 4):
-                    if j == n_abs + 1:
-                        X[i, j] = -ptfn_abs_tes / C_abs
-                    elif j == n_abs + 2:
-                        X[i, j] = ptfn_abs_tes / C_tes
-
-            elif i == n_abs + 4:  # Phonon Noise (TES2-Bath)
-                for j in range(n_abs + 4):
-                    if j == n_abs + 2:
-                        X[i, j] = ptfn_tes_bath / C_tes
-                        break
-
-            elif i == n_abs + 5:  # johnson Noise (Load2)
-                for j in range(n_abs + 4):
-                    if j == n_abs + 3:
-                        X[i, j] = enj_R / L
-                        break
-
-            elif i == n_abs + 6:  # johnson Noise (TES2)
-                for j in range(n_abs + 4):
-                    if j == n_abs + 3:
-                        X[i, j] = -enj / L
-                    elif j == n_abs + 2:
-                        X[i, j] = I * enj / C_tes
-
-            else:  # Phonon Noise (Absorber-Absorber)
-                for j in range(n_abs + 4):
-                    if j == i - 2:
-                        X[i, j] = ptfn_abs_abs / C_abs
-                    elif j == i - 1:
-                        X[i, j] = -ptfn_abs_abs / C_abs
+        X[4, 7] = enj_R / L#
+        X[4, 8] = -enj / L#
         return X
 
     # --------------------------------------------------
 
     # matrix M without omega
     def matrix_M(n_abs, omega):
-        X = np.zeros((n_abs + 4, n_abs + 4), dtype=np.complex128)  # initialize matrix
-        for i in range(n_abs + 4):
-            if i == 0:
-                for j in range(n_abs + 4):
-                    if j == 0:
-                        X[i, j] = 1 / t_el + omega * 1.0j
-                    elif j == 1:
-                        X[i, j] = L_I * G_tes_bath / (I * L)
-            elif i == 1:
-                for j in range(n_abs + 4):
-                    if j == 0:
-                        X[i, j] = -I * R * (2 + b) / C_tes
-                    elif j == 1:
-                        X[i, j] = 1 / t_I + (G_abs_tes / C_tes) + omega * 1.0j
-                    elif j == 2:
-                        X[i, j] = -G_abs_tes / C_tes
-            elif i == 2:
-                for j in range(n_abs + 4):
-                    if j == 1:
-                        X[i, j] = -G_abs_tes / C_abs
-                    elif j == 2:
-                        X[i, j] = G_abs_tes / C_abs + G_abs_abs / C_abs + omega * 1.0j
-                    elif j == 3:
-                        X[i, j] = -G_abs_abs / C_abs
-            elif i == n_abs + 1:
-                for j in range(n_abs + 4):
-                    if j == n_abs:
-                        X[i, j] = -G_abs_abs / C_abs
-                    elif j == n_abs + 1:
-                        X[i, j] = (G_abs_tes + G_abs_abs) / C_abs + omega * 1.0j
-                    elif j == n_abs + 2:
-                        X[i, j] = -G_abs_tes / C_abs
-            elif i == n_abs + 2:
-                for j in range(n_abs + 4):
-                    if j == n_abs + 1:
-                        X[i, j] = -G_abs_tes / C_tes
-                    elif j == n_abs + 2:
-                        X[i, j] = 1 / t_I + (G_abs_tes / C_tes) + omega * 1.0j
-                    elif j == n_abs + 3:
-                        X[i, j] = -I * R * (2 + b) / C_tes
-            elif i == n_abs + 3:
-                for j in range(n_abs + 4):
-                    if j == n_abs + 2:
-                        X[i, j] = L_I * G_tes_bath / (I * L)
-                    elif j == n_abs + 3:
-                        X[i, j] = 1 / t_el + omega * 1.0j
-            else:
-                for j in range(n_abs + 4):
-                    if j == i - 1:
-                        X[i, j] = -G_abs_abs / C_abs
-                    elif j == i:
-                        X[i, j] = 2 * G_abs_abs / C_abs + omega * 1.0j
-                    elif j == i + 1:
-                        X[i, j] = -G_abs_abs / C_abs
+        X = np.zeros((5, 5), dtype=np.complex128)  # initialize matrix
+        
+        X[0, 0] = 1 / t_el + omega * 1.0j
+        X[0, 1] = L_I * G_tes_bath / (I * L)
+
+        X[1, 0] = -I * R * (2 + b) / C_tes
+        X[1, 1] = 1 / t_I + (G_abs_tes / C_tes) + omega * 1.0j
+        X[1, 2] = -G_abs_tes / C_tes
+
+        X[2,1]=-G_abs_tes/C_abs
+        X[2,2]=2*G_abs_abs/C_abs+omega*1.0j
+        X[2,3]=-G_abs_tes/C_abs
+
+        X[3, 2] = -G_abs_tes / C_tes
+        X[3, 3] = 1 / t_I + (G_abs_tes / C_tes) + omega * 1.0j
+        X[3, 4] = -I * R * (2 + b) / C_tes
+
+        X[4, 3] = L_I * G_tes_bath / (I * L)
+        X[4, 4] = 1 / t_el + omega * 1.0j
+
         return X
 
-    N = matrix_N(n_abs).T
+
+    N = matrix_N(1)
 
     omega = frequency * 2 * math.pi
     noise = []
 
     cnt = 0
     for omg in tqdm.tqdm(omega):
-        M = matrix_M(n_abs, omg)
-        noise_out = np.abs(np.linalg.solve(M, N)[0])
+        M_inv = np.linalg.inv(matrix_M(n_abs, omg))
+        noise_out = np.abs(M_inv[0,:]@N)
         noise.append(noise_out)
     noise = np.array(noise).T
-    noise = np.vstack([noise, np.sum(noise, axis=0)])
+    np.savetxt(f"{output}/noise_all.dat",noise)
 
-    np.savetxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat", noise[n_abs + 7])
+    np.savetxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat", np.sum(noise,axis=0))
 
-    np.savetxt(f"{output}/noise_spectral_absorber_alpha71beta1.6.dat",np.sum(noise[4 : n_abs + 3], axis=0))
+    np.savetxt(f"{output}/noise_a-a.dat",noise[4,:])
 
     # --- grough Noise Spectral Density--------------------------------------------
     plt.figure(figsize=(8, 8))
     plt.plot(
         frequency,
-        noise[0],
+        noise[0,:],
         color="red",
         linewidth=2,
         linestyle=(0, (5, 1)),
@@ -282,7 +205,7 @@ def MakeNoise():
     )
     plt.plot(
         frequency,
-        noise[n_abs + 6],
+        noise[-1,:],
         color="orange",
         linewidth=2,
         linestyle=(0, (5, 1)),
@@ -290,7 +213,7 @@ def MakeNoise():
     )
     plt.plot(
         frequency,
-        noise[1],
+        noise[1,:],
         color="lawngreen",
         linewidth=2,
         linestyle=(0, (5, 5)),
@@ -298,7 +221,7 @@ def MakeNoise():
     )
     plt.plot(
         frequency,
-        noise[n_abs + 5],
+        noise[7,:],
         color="greenyellow",
         linewidth=2,
         linestyle=(0, (5, 5)),
@@ -306,7 +229,7 @@ def MakeNoise():
     )
     plt.plot(
         frequency,
-        noise[2],
+        noise[2,:],
         color="blue",
         linewidth=2,
         linestyle=(0, (3, 5, 1, 5)),
@@ -314,7 +237,7 @@ def MakeNoise():
     )
     plt.plot(
         frequency,
-        noise[n_abs + 4],
+        noise[6,:],
         color="royalblue",
         linewidth=2,
         linestyle=(0, (3, 5, 1, 5)),
@@ -322,7 +245,7 @@ def MakeNoise():
     )
     plt.plot(
         frequency,
-        noise[3],
+        noise[3,:],
         color="magenta",
         linewidth=2,
         linestyle=(0, (3, 1, 1, 1)),
@@ -330,18 +253,16 @@ def MakeNoise():
     )
     plt.plot(
         frequency,
-        noise[n_abs + 3],
+        noise[5,:],
         color="pink",
         linewidth=2,
         linestyle=(0, (3, 1, 1, 1)),
         label="Phonon Noise (TES2-Absorber)",
     )
 
-    phonon_noise = np.sum(noise[4 : n_abs + 3], axis=0)
-
     plt.plot(
         frequency,
-        phonon_noise,
+        noise[4,:],
         color="dodgerblue",
         linewidth=2,
         linestyle=(0, (3, 1, 1, 1, 1, 1)),
@@ -349,7 +270,7 @@ def MakeNoise():
     )
 
     plt.plot(
-        frequency, noise[n_abs + 7], color="black", linewidth=3, label="Total Noise"
+        frequency, np.sum(noise,axis=0), color="black", linewidth=3, label="Total Noise"
     )
 
     plt.xlabel("Frequency [Hz]", fontsize=20)
@@ -627,8 +548,8 @@ def MS_Noise():
 
 #MakePulse()
 #FitRatios()
-#MakeNoise()
+MakeNoise()
 #SaveNoise()
-CheckPulse()
+#CheckPulse()
 #MultiPulse()
 #MS_Noise()

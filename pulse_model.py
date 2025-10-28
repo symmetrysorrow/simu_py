@@ -28,8 +28,6 @@ e = 1.602e-19
 
 
 def model(para):
-
-
     C_abs= para["C_abs"] / para['n_abs']
     G_abs_abs = para["G_abs-abs"] * (para['n_abs'] - 1) 
     energy = para['E']*1e3
@@ -138,8 +136,6 @@ def model(para):
     arb = [np.linalg.solve(vec, i) for i in X]
 
     time = np.linspace(0, para['samples'] / para['rate'], int(para['samples']))
-
-
 
     I_t_0 = []
     I_t_sub_0 = []

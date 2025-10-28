@@ -21,6 +21,7 @@ import scipy.fftpack as fft
 import cmath
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
+import general
 # --------------------------------------------------------------
 k_b = 1.381 * 1.0e-23  # Boltzmann's constant
 ptfn_Flink = 0.5
@@ -32,7 +33,7 @@ zure = 30
 
 pulse_num=500
 
-output="h:/hata2025/1332_120_100"
+output="h:/hata2025/1332_215_195"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -187,9 +188,9 @@ def MakeNoise():
         noise_out = np.abs(M_inv[0,:]@N)
         noise.append(noise_out)
     noise = np.array(noise).T
-    np.savetxt(f"{output}/noise_all.dat",noise)
+    np.savetxt(f"{output}/noise_each.dat",noise)
 
-    np.savetxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat", np.sum(noise,axis=0))
+    np.savetxt(f"{output}/noise_total.dat", np.sum(noise,axis=0))
 
     np.savetxt(f"{output}/noise_a-a.dat",noise[4,:])
 
@@ -281,71 +282,57 @@ def MakeNoise():
     plt.grid()
     plt.legend(loc="best", fancybox=True, fontsize=10, ncol=2)
     plt.tight_layout()
-    plt.savefig(f"{output}/noise_spectrum_alpha71beta1.6.png", dpi=700)
+    plt.savefig(f"{output}/noise_all.png", dpi=700)
     plt.show()
     plt.cla()
 
 def SaveNoise():
-    def Noise(noise_spe_dens):
-        noise_samples=len(noise_spe_dens)
-
-        df = 1e6 / noise_samples
-
-        cnt = random.randint(1, 10000)
-        noise_spe = random_noise(noise_spe_dens, cnt)
-        ifft_input = noise_spe * np.sqrt(df) * (noise_samples / np.sqrt(2)) * 2 
-        noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
-        return noise_ifft
-    
-    noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
-
-    np.savetxt(f"{output}/Noise_time_domain.dat",Noise(noise_spe_dens))
+    with open(f'{output}/input.json', "r") as f:
+        para = json.load(f)
+    noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
+    sample=int(para['samples'])
+    df=para['rate']/sample
+    d_length=1#sample
+    noise_spe_dens*=np.sqrt(df)*(d_length/np.sqrt(2))*2
+    amplitude_model = np.zeros(sample)
+    for i in tqdm.tqdm(range(100)):
+        noise_time=general.GN(noise_spe_dens)[:sample]
+        noise_time=general.Bessel(noise_time,para['rate'],100000)
+        noise_time=general.Bessel(noise_time,para['rate'],10000)
+        noise_fft=sf.fft(noise_time)
+        noise_amp = np.abs(noise_fft)
+        amplitude_model += noise_amp
+    amplitude_model /= 100
+    df=para["rate"]/sample
+    power=amplitude_model**2 / df
+    amp_dens=np.sqrt(power)
+    amp_dens = amp_dens[: int(sample / 2) + 1] * eta * 1e+6
+    plt.plot(amp_dens)
+    plt.xlabel("Frequency [Hz]", fontsize=20)
+    plt.ylabel("Amplitude [uA/rtHz]", fontsize=20)
+    plt.loglog()
+    plt.savefig(f"{output}/noise_total-bessel100k.png", dpi=350)
+    plt.clf()
+    np.savetxt(f"{output}/noise_total-bessel100k.dat",amp_dens)
 
 
 def CheckPulse():
     with open(f'{output}/input.json', "r") as f:
         para = json.load(f)
 
+    sample=int(para['samples'])
+
     # simulated noise frequency domain
-    noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
-    noise_samples = len(noise_spe_dens)
+    noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
+    df=para['rate']/sample
+    d_length=sample
+    noise_spe_dens*=np.sqrt(df)*(d_length/np.sqrt(2))*2
+
+    noise_time=general.GN(noise_spe_dens)[:sample]
+    print(f"spe len:{len(noise_spe_dens)} time len:{len(noise_time)}")
 
     time = np.linspace(0, para['samples'] / para['rate'], int(para['samples']))
     frequency_pulse = np.arange(0, para['rate'], para['rate'] / int(para['samples']))
-    frequency_noise = np.arange(0, para['rate'], para['rate'] / noise_samples)
-
-    # if list is empty, n_abs block output
-    if para["position"] == []:
-        para["position"] = list(range(1, para["n_abs"] + 1))
-    
-    # add random phase
-    noise_spe = random_noise(noise_spe_dens, 0)
-    # noise spectra random phase
-    noise_spe_amp = np.abs(noise_spe)
-
-    df = para['rate']/noise_samples
-    df_time = para['rate']/int(para['samples'])
-    dt = float(1/noise_samples)
-    d_length = noise_samples
-
-    ifft_input = noise_spe*np.sqrt(df)*(d_length/np.sqrt(2))*2 # *2 ???
-
-    # simulated noise time domain
-    noise_ifft= np.fft.ifft(ifft_input, noise_samples).real
-
-    noise_fft = sf.fft(noise_ifft,int(noise_samples))[:int(noise_samples/2)]
-
-    # simulated noise frequency domain (random phase)
-    amp = np.abs(noise_fft)/np.sqrt(df)/(noise_samples/np.sqrt(2.))
-
-    pulse = np.loadtxt(f"{output}/{para["E"]}keV_{para["position"][0]}/pulse/CH0/CH0_1.dat")
-
-    pulse_fft = np.fft.fft(pulse)
-    pulse_amp = np.abs(pulse_fft)/np.sqrt(df)/(noise_samples/np.sqrt(2.))
-
-    pulse_noise = pulse + noise_ifft[: int(para["samples"])]
-    pulse_noise_fft = sf.fft(pulse_noise,int(para["samples"]))
-    pulse_noise_amp = np.abs(pulse_noise_fft)/np.sqrt(df_time)/(int(para["samples"])/np.sqrt(2.))
 
     # --- Pulse time domain
     cnt = 0
@@ -362,32 +349,16 @@ def CheckPulse():
     plt.tight_layout()
     plt.legend(fontsize=10,loc="best", fancybox=True)
     plt.savefig(f"{output}/pulse_post.png", dpi=350)
-    plt.show()
-    plt.clf()
-
-    # ---- Plot frequency domain ------
-    plt.plot(frequency_noise[:int(noise_samples/2)],amp[:int(noise_samples/2)]*1e12,label = "ifft simulated fft (random phase)")
-    plt.plot(frequency_noise[:int(noise_samples/2)],noise_spe_amp[:int(noise_samples/2)]*1e12,"o",markersize=3.0,label = "simulated noise (random phase)")
-    plt.plot(frequency_noise[:int(noise_samples/2)],noise_spe_dens[:int(noise_samples/2)]*1e12,label = "simulated noise")
-    plt.loglog()
-    plt.xlabel("Frequency[Hz]")
-    plt.ylabel("Intensity[pA/Hz$^{1/2}$]")
-    plt.grid()
-    plt.legend(fontsize=12)
-    plt.tight_layout()
-    plt.savefig(f"{output}/noise_spectra.png", dpi=350)
-    plt.show()
     plt.clf()
 
     # ---- noise time domain --------
-    plt.plot(time * 1e3,noise_ifft[:int(para['samples'])] * 1e6,linewidth=1.5)
+    plt.plot(time * 1e3,noise_time* 1e6,linewidth=1.5)
     plt.xlabel("Time [ms]", fontsize=20)
     plt.ylabel("Current [uA]", fontsize=20)
     plt.grid()
     plt.tight_layout()
     #plt.legend(fontsize=12, loc='upper right')
     plt.savefig(f"{output}/noise_post.png", dpi=350)
-    plt.show()
     plt.clf()
 
     # ---- pulse with noise time domain -------
@@ -395,14 +366,8 @@ def CheckPulse():
     cnt = 0
     for i in para["position"]:
         data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
-        noise_spe = random_noise(noise_spe_dens, cnt)
-        #noise = np.fft.ifft(noise_spe, noise_samples).real * 2
-        ifft_input = noise_spe*np.sqrt(df)*(d_length/np.sqrt(2))*2 # *2 ???
 
-        # simulated noise time domain
-        noise_ifft= np.fft.ifft(ifft_input, noise_samples).real
-
-        data += noise_ifft[: int(para["samples"])]
+        data += general.GN(noise_spe_dens)[:sample]
         #data = gp.BesselFilter(data,para['rate'],para['cutoff'])
             
         plt.plot(time * 1e3,data * 1e6,color=cm.hsv((float(cnt)) / float(len(para["position"]))),linewidth=1.5,label="abs" + str(i),)
@@ -414,29 +379,9 @@ def CheckPulse():
     plt.tight_layout()
     plt.legend(fontsize=10,loc="best", fancybox=True)
     plt.savefig(f"{output}/pulse_noise_post.png", dpi=350)
-    plt.show()
-    plt.clf()
-        
-        
-    # ---- pulse with noise frequencyx domain -------
-
-    plt.plot(frequency_pulse[1 : int(para['samples'] / 2)],pulse_noise_amp[1 : int(para['samples'] / 2)]*1e12,c="orange",label = 'pulse + noise (random phase)')
-    plt.plot(frequency_noise[1 : int(para['samples'] / 2)],pulse_amp[1 : int(para['samples'] / 2)]*1e12+noise_spe_dens[1 : int(para['samples'] / 2)]*1e12,c="black",linewidth = 2,label = "pulse + noise")
-    ## rawdata
-    plt.plot(frequency_noise[1 : int(noise_samples / 2)],noise_spe_dens[1 : int(noise_samples / 2)]*1e12,"--",c="green",label = "noise")
-
-    plt.plot(frequency_noise[1 : int(para['samples'] / 2)], pulse_amp[1 : int(para['samples'] / 2)]*1e12,"--",c="red",label= "pulse")
-
-    plt.loglog()
-    plt.xlabel("Frequency[Hz]")
-    plt.ylabel("Intensity[pA/Hz$^{1/2}$]")
-    plt.grid()
-    plt.tight_layout()
-    plt.legend(fontsize=10,loc="best", fancybox=True)
-    plt.savefig(f"{output}/pulse_noise_spectra.png", dpi=350)
-    plt.show()
     plt.clf()
 
+    os.makedirs(f"{output}/SN_Ratio", exist_ok=True)
 
     # ---- Show Ratio---
     data=np.loadtxt(f"{output}/ratios.txt",delimiter=',')
@@ -444,15 +389,31 @@ def CheckPulse():
     x = data[:, 0]
     y = data[:, 1]
 
-    # プロット
     plt.scatter(x, y, c=x, cmap='coolwarm', s=50)
-
     plt.xlabel('Position[mm]')
     plt.ylabel('CH1/CH0[-]')
     plt.tight_layout()
     plt.grid(True)
     plt.savefig(f"{output}/ratios.png", dpi=350)
-    plt.show()
+    plt.cla()
+
+    #SN ratio
+    for i in para["position"]:
+        pulse = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
+        pulse_noise=pulse+general.GN(noise_spe_dens)[:sample]
+        pulse_rfft= np.fft.rfft(pulse)
+        pulse_noise_rfft= np.fft.rfft(pulse_noise)
+        plt.plot(frequency_pulse[:len(pulse_noise_rfft)],np.abs(pulse_noise_rfft),label=f"posi+noise",linestyle='--')
+        plt.plot(frequency_pulse[:len(pulse_rfft)],np.abs(pulse_rfft),label=f"pulse")
+        plt.plot(frequency_pulse,noise_spe_dens,color='black',label="noise")
+        plt.xlim(1,5e4)
+        plt.loglog()
+        plt.legend()
+        plt.xlabel("Frequency [Hz]")
+        plt.ylabel("Amplitude [A/rtHz]")
+        plt.savefig(f"{output}/SN_Ratio/SN_ratio_posi{i}.png", dpi=350)
+        plt.cla()
+
 
 def MultiPulse():
 
@@ -523,7 +484,6 @@ def MS_Noise():
         para = json.load(f)
 
     for posi in tqdm.tqdm(para["position"]):
-
         for ch in [0,1]:
             os.makedirs(f"{output}/{para["E"]}keV_{posi}/pulse_noise_ms_test/CH{ch}", exist_ok=True)
 
@@ -549,7 +509,7 @@ def MS_Noise():
 #MakePulse()
 #FitRatios()
 MakeNoise()
-#SaveNoise()
+SaveNoise()
 #CheckPulse()
 #MultiPulse()
 #MS_Noise()

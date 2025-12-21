@@ -37,6 +37,8 @@ for x in x_grid:
 
 previous_end = None
 
+total_energy=0.0
+
 # 軌跡をプロットし、各要素の最後の点と次の要素の最初の点をつなぐ
 for key in sorted(data.keys(), key=int):
     values = data[key]
@@ -53,6 +55,12 @@ for key in sorted(data.keys(), key=int):
     
     # 現在の要素の最後の点を保存
     previous_end = (x[-1], z[-1])
+
+    E_deposit=sum(values["E_deposit"])
+    total_energy+=E_deposit
+
+
+print(f"Total deposited energy: {total_energy} MeV")
 
 # 軸ラベル
 #ax.set_xlabel("X")

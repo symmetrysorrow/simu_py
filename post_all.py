@@ -1,4 +1,4 @@
-1172# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # --------last updated 2018/12/01 by kurume-------------------
 
@@ -33,7 +33,7 @@ zure = 30
 
 pulse_num=500
 
-output="h:/hata2025/1332_215_195"
+output="h:/hata2025/200_180"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -292,13 +292,13 @@ def SaveNoise():
     noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
     sample=int(para['samples'])
     df=para['rate']/sample
-    d_length=1#sample
+    d_length=sample
     noise_spe_dens*=np.sqrt(df)*(d_length/np.sqrt(2))*2
     amplitude_model = np.zeros(sample)
     for i in tqdm.tqdm(range(100)):
         noise_time=general.GN(noise_spe_dens)[:sample]
-        noise_time=general.Bessel(noise_time,para['rate'],100000)
         noise_time=general.Bessel(noise_time,para['rate'],10000)
+        noise_time=general.Bessel(noise_time,para['rate'],para["cutoff"])
         noise_fft=sf.fft(noise_time)
         noise_amp = np.abs(noise_fft)
         amplitude_model += noise_amp
@@ -314,7 +314,6 @@ def SaveNoise():
     plt.savefig(f"{output}/noise_total-bessel100k.png", dpi=350)
     plt.clf()
     np.savetxt(f"{output}/noise_total-bessel100k.dat",amp_dens)
-
 
 def CheckPulse():
     with open(f'{output}/input.json', "r") as f:
@@ -343,7 +342,7 @@ def CheckPulse():
         cnt += 1
     plt.xlabel("Time [ms]", fontsize=20)
     plt.ylabel("Current [uA]", fontsize=20)
-    plt.xlim(0,10)
+    #plt.xlim(0,10)
     #plt.ylim(0,2)
     plt.grid()
     plt.tight_layout()
@@ -506,10 +505,10 @@ def MS_Noise():
                 for future in futures:
                     future.result()  # 処理結果が必要な場合、ここで結果を取得
 
-#MakePulse()
+MakePulse()
 #FitRatios()
-MakeNoise()
-SaveNoise()
+#MakeNoise()
+#SaveNoise()
 #CheckPulse()
 #MultiPulse()
 #MS_Noise()

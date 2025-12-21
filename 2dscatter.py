@@ -50,8 +50,15 @@ x_data = x_df[x_axis].values
 y_data = y_df[y_axis].values
 
 # 両方のデータのidも取得
-x_ids = x_df['id'].values
-y_ids = y_df['id'].values
+if "id" in x_df.columns:
+    x_ids = x_df["id"].values
+else:
+    x_ids = x_df.iloc[:, 0].values
+
+if "id" in y_df.columns:
+    y_ids = y_df["id"].values
+else:
+    y_ids = y_df.iloc[:, 0].values
 
 fig, ax = plt.subplots()
 sc = ax.scatter(x_data, y_data)

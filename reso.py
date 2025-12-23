@@ -22,42 +22,97 @@ def remove_outliers(data, percentile=0.1):
     upper_bound = np.percentile(data, 100 - percentile)
     return data[(data >= lower_bound) & (data <= upper_bound)]
 
-def ReadPulse(Data_path,pulse,path,target):
+def ReadPulse(Data_path, pulse, target="Pulse_ms", path="", debug_plot=False):
     with open(f"{Data_path}/input.json") as f:
-        para=json.load(f)
-    if target != "Pulse_ms":
-        pulse=gp.BesselFilter(pulse,para["rate"],para["cutoff"])
-    try:
-        peak = np.max(pulse)
-        peak_index = np.argmax(pulse)
-        peak_av = np.mean(pulse[peak_index - 10 : peak_index +90])
+        para = json.load(f)
 
+    if np.mean(pulse) <=0:
+        pulse*= -1
+
+    try:
+        if target != "Pulse_ms":
+            pulse_filt = gp.BesselFilter(pulse, para["rate"], para["cutoff"])
+        else:
+            pulse_filt = pulse
+
+        peak = np.max(pulse_filt)
+        peak_index = np.argmax(pulse_filt)
+
+        # 明らかにおかしい波形は除外
+        if peak_index < 10:
+            raise ValueError("peak too early")
+
+        # peak average
+        l = max(0, peak_index - 10)
+        r = min(len(pulse_filt), peak_index + 90)
+        peak_av = np.mean(pulse_filt[l:r])
+
+        # rise 90%
+        rise_90 = None
         for i in reversed(range(0, peak_index)):
-            if pulse[i] <= peak * 0.9:
+            if pulse_filt[i] <= peak * 0.9:
                 rise_90 = i
                 break
+        if rise_90 is None:
+            raise ValueError("rise_90 not found")
 
-        try:
-            rise_90+=0
-        except:
-            rise_90=0
+        # rise 10%
+        rise_10 = None
         for j in reversed(range(0, rise_90)):
-            if pulse[j] <= peak * 0.1:
+            if pulse_filt[j] <= peak * 0.1:
                 rise_10 = j
                 break
-
-        try:
-            rise_10+=0
-        except:
-            rise_10=0
+        if rise_10 is None:
+            raise ValueError("rise_10 not found")
 
         rise = (rise_90 - rise_10) / para["rate"]
 
-        ST_height = np.mean(pulse[para["SettlingTime"] - 10 : para["SettlingTime"] +90])
+        # settling height
+        st_l = para["SettlingTime"] - 10
+        st_r = para["SettlingTime"] + 90
+        ST_height = np.mean(pulse_filt[st_l:st_r])
 
-        return [peak_av,peak_index,rise,ST_height]
-    except:
-        print(path)
+        # =========================
+        # debug plot
+        # =========================
+        if debug_plot:
+            t = np.arange(len(pulse_filt)) / para["rate"]
+
+            plt.figure(figsize=(8, 4))
+            plt.plot(t, pulse_filt, label="pulse")
+
+            plt.axvline(t[peak_index], color="r", linestyle="--", label="peak")
+            plt.axvline(t[rise_10], color="g", linestyle="--", label="10%")
+            plt.axvline(t[rise_90], color="orange", linestyle="--", label="90%")
+
+            plt.axhline(peak * 0.1, color="g", alpha=0.3)
+            plt.axhline(peak * 0.9, color="orange", alpha=0.3)
+
+            plt.axvspan(
+                st_l / para["rate"],
+                st_r / para["rate"],
+                color="gray",
+                alpha=0.2,
+                label="Settling window",
+            )
+
+            plt.xlabel("Time [s]")
+            plt.ylabel("Amplitude")
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
+
+        return [peak_av, peak_index, rise, ST_height]
+
+    except Exception as e:
+        if debug_plot:
+            print("ReadPulse failed:",  e)
+            plt.figure(figsize=(6, 3))
+            plt.plot(pulse)
+            plt.title(f"FAILED: {path}")
+            plt.show()
+
+        return [np.nan, np.nan, np.nan, np.nan]
 
 def MakeOutput(Data_path,target):
     with open(f"{Data_path}/input.json") as f:
@@ -65,22 +120,26 @@ def MakeOutput(Data_path,target):
 
     if target != "Pulse_ms":
         print("BesselFilter")
-    for posi in tqdm.tqdm(para["position"]):
+    for i, posi in enumerate(para["position"]):
+        print(f"{i+1}/{len(para['position'])}")
         for ch in[0,1]:
+            print(f"Ch:{ch}")
             results=[]
             pulse_numbers=[]
             pulse_pathes = natsort.natsorted(glob.glob(f'{Data_path}/{para["E"]}keV_{posi}/{target}/CH{ch}/CH{ch}_*.dat'))
 
-            for path in pulse_pathes:
+            for path in tqdm.tqdm(pulse_pathes):
                 pattern = fr'CH{ch}_(\d+).dat'
                 match = re.search(pattern, path)
                 pulse_numbers.append(match.group(1))
 
                 pulse=np.loadtxt(path)
-                results.append(ReadPulse(Data_path,pulse,path,target))
+                result=ReadPulse(Data_path,pulse,path=path,target=target)
+                results.append(result)
 
             columns=["height","peak_index","rise","ST_Height"]
             df = pd.DataFrame(results,columns=columns,index=pulse_numbers)
+            df.index.name = "id"
             df.to_csv(f"{Data_path}/{para["E"]}keV_{posi}/{target}/output_TES{ch}.csv")
 
 def gaussian(x, amp, mean, stddev):
@@ -308,10 +367,16 @@ def Resos(Data_path,target,show):
     df=pd.DataFrame(data,index=index_label)
     df.to_csv(f"{Data_path}/ene_resos_{target}.csv")
 
+def try_ReadPulse(Data_path):
+    pulse_path=input("Pulse path:")
+    pulse=np.loadtxt(pulse_path)
+    peak_av, peak_index, rise, ST_height=ReadPulse(Data_path,pulse,path=pulse_path,debug_plot=True)
+    print(f"peak_av: {peak_av}, peak_index: {peak_index}, rise: {rise}, ST_height: {ST_height}")
+
 
 show=False
-Data_path="F:/hata/1332_adaptive"
-MakeOutput(Data_path,"Pulse_noise")
+Data_path="h:/hata2025/1332_120_100"
+#MakeOutput(Data_path,"Pulse_noise")
 #MakeOutput(Data_path,"Pulse_ms")
 #MakeOutput(Data_path,"Pulse_ms_noise")
 #MakeOutput(Data_path,"pulse_noise_ms_test")
@@ -319,3 +384,4 @@ MakeOutput(Data_path,"Pulse_noise")
 #Resos(Data_path,"Pulse_ms",show)
 #Resos(Data_path,"Pulse_ms_noise",show)
 #Resos(Data_path,"pulse_noise_ms_test",show)
+try_ReadPulse(Data_path)

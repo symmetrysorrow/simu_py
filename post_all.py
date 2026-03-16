@@ -33,7 +33,7 @@ zure = 30
 
 pulse_num=500
 
-output="h:/hata2025/200_180"
+output="H:\\hata2025\\1332_215_195"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -43,6 +43,58 @@ def random_noise(spe, seed):
     complex = [cmath.rect(i, j) for i, j in zip(spe_mirror, phase)]
     complex_con = [i.conjugate() for i in complex[len(spe) :]]  # conjugate
     return np.r_[complex[: len(spe)], complex_con]
+
+def generate_noise_from_asd(noise_asd, sample, rate, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+
+    noise_asd = np.asarray(noise_asd[: int(sample / 2) + 1], dtype=float)
+    df = rate / sample
+
+    spectrum = np.zeros(len(noise_asd), dtype=np.complex128)
+    if len(noise_asd) == 0:
+        return np.zeros(sample)
+
+    spectrum[0] = noise_asd[0] * sample * np.sqrt(df)
+
+    if len(noise_asd) > 2:
+        phases = rng.uniform(0.0, 2.0 * np.pi, len(noise_asd) - 2)
+        magnitude = noise_asd[1:-1] * sample * np.sqrt(df / 2.0)
+        spectrum[1:-1] = magnitude * np.exp(1j * phases)
+
+    if sample % 2 == 0 and len(noise_asd) > 1:
+        spectrum[-1] = noise_asd[-1] * sample * np.sqrt(df)
+    elif len(noise_asd) > 1:
+        phase = rng.uniform(0.0, 2.0 * np.pi)
+        magnitude = noise_asd[-1] * sample * np.sqrt(df / 2.0)
+        spectrum[-1] = magnitude * np.exp(1j * phase)
+
+    return np.fft.irfft(spectrum, n=sample)
+
+def asd_from_rfft(noise_fft, sample, rate):
+    noise_fft = np.asarray(noise_fft)
+    df = rate / sample
+    amp_dens = np.zeros(len(noise_fft), dtype=float)
+
+    if len(noise_fft) == 0:
+        return amp_dens
+
+    amp_dens[0] = np.abs(noise_fft[0]) / (sample * np.sqrt(df))
+
+    if len(noise_fft) > 2:
+        amp_dens[1:-1] = (
+            np.sqrt(2.0) * np.abs(noise_fft[1:-1]) / (sample * np.sqrt(df))
+        )
+
+    if len(noise_fft) > 1:
+        if sample % 2 == 0:
+            amp_dens[-1] = np.abs(noise_fft[-1]) / (sample * np.sqrt(df))
+        else:
+            amp_dens[-1] = (
+                np.sqrt(2.0) * np.abs(noise_fft[-1]) / (sample * np.sqrt(df))
+            )
+
+    return amp_dens
 
 def MakePulse():
     with open(f"{output}/input.json", "r") as f:
@@ -291,29 +343,39 @@ def SaveNoise():
         para = json.load(f)
     noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
     sample=int(para['samples'])
-    df=para['rate']/sample
-    d_length=sample
-    noise_spe_dens*=np.sqrt(df)*(d_length/np.sqrt(2))*2
-    amplitude_model = np.zeros(sample)
+    rate = para["rate"]
+    noise_spe_dens = noise_spe_dens[: int(sample / 2) + 1]
+    power_model = np.zeros(len(noise_spe_dens))
     for i in tqdm.tqdm(range(100)):
-        noise_time=general.GN(noise_spe_dens)[:sample]
-        noise_time=general.Bessel(noise_time,para['rate'],10000)
-        noise_time=general.Bessel(noise_time,para['rate'],para["cutoff"])
-        noise_fft=sf.fft(noise_time)
-        noise_amp = np.abs(noise_fft)
-        amplitude_model += noise_amp
-    amplitude_model /= 100
-    df=para["rate"]/sample
-    power=amplitude_model**2 / df
-    amp_dens=np.sqrt(power)
-    amp_dens = amp_dens[: int(sample / 2) + 1] * eta * 1e+6
-    plt.plot(amp_dens)
+        noise_time = generate_noise_from_asd(noise_spe_dens, sample, rate)
+        noise_time = general.Bessel(noise_time, rate, 10000)
+        noise_time = general.Bessel(noise_time, rate, para["cutoff"])
+        noise_fft = np.fft.rfft(noise_time)
+        power_model += np.abs(noise_fft) ** 2
+    power_model /= 100
+    amp_dens = np.sqrt(power_model)
+    amp_dens = asd_from_rfft(amp_dens, sample, rate) * eta * 1e+6
+    freq = np.fft.rfftfreq(sample, d=1 / rate)
+    if len(freq) > 1:
+        freq = freq[:-1]
+        amp_dens = amp_dens[:-1]
+    plt.plot(freq, amp_dens)
     plt.xlabel("Frequency [Hz]", fontsize=20)
     plt.ylabel("Amplitude [uA/rtHz]", fontsize=20)
     plt.loglog()
     plt.savefig(f"{output}/noise_total-bessel100k.png", dpi=350)
     plt.clf()
-    np.savetxt(f"{output}/noise_total-bessel100k.dat",amp_dens)
+    np.savetxt(f"{output}/noise_total-bessel100k.dat", amp_dens)
+
+    if True:
+        pre=np.loadtxt(f"{output}/noise_total-bessel100k-pre.dat")
+        plt.plot(pre,label="pre")
+        plt.plot(amp_dens,label="post")
+        plt.xlabel("Frequency [Hz]", fontsize=20)
+        plt.ylabel("Amplitude [uA/rtHz]", fontsize=20)
+        plt.loglog()
+        plt.legend()
+        plt.show()
 
 def CheckPulse():
     with open(f'{output}/input.json', "r") as f:
@@ -414,6 +476,8 @@ def CheckPulse():
         plt.cla()
 
 
+
+
 def MultiPulse():
 
     pulse_num=300
@@ -505,10 +569,10 @@ def MS_Noise():
                 for future in futures:
                     future.result()  # 処理結果が必要な場合、ここで結果を取得
 
-MakePulse()
+#MakePulse()
 #FitRatios()
-#MakeNoise()
-#SaveNoise()
+MakeNoise()
+SaveNoise()
 #CheckPulse()
 #MultiPulse()
 #MS_Noise()

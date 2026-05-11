@@ -33,7 +33,7 @@ zure = 30
 
 pulse_num=500
 
-output="H:\\hata2025\\1332_215_195"
+output="H:\\hata2025\\1332_215_195-trial"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -335,7 +335,7 @@ def MakeNoise():
     plt.legend(loc="best", fancybox=True, fontsize=10, ncol=2)
     plt.tight_layout()
     plt.savefig(f"{output}/noise_all.png", dpi=700)
-    plt.show()
+    #plt.show()
     plt.cla()
 
 def SaveNoise():
@@ -348,7 +348,7 @@ def SaveNoise():
     power_model = np.zeros(len(noise_spe_dens))
     for i in tqdm.tqdm(range(100)):
         noise_time = generate_noise_from_asd(noise_spe_dens, sample, rate)
-        noise_time = general.Bessel(noise_time, rate, 10000)
+        noise_time = general.Bessel(noise_time, rate, 100000)
         noise_time = general.Bessel(noise_time, rate, para["cutoff"])
         noise_fft = np.fft.rfft(noise_time)
         power_model += np.abs(noise_fft) ** 2
@@ -429,17 +429,17 @@ def CheckPulse():
         data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
 
         data += general.GN(noise_spe_dens)[:sample]
-        #data = gp.BesselFilter(data,para['rate'],para['cutoff'])
+        #data = general.Bessel(data,para['rate'],para['cutoff'])
             
         plt.plot(time * 1e3,data * 1e6,color=cm.hsv((float(cnt)) / float(len(para["position"]))),linewidth=1.5,label="abs" + str(i),)
         cnt += 1
     plt.xlabel("Time [ms]", fontsize=20)
     plt.ylabel("Current [uA]", fontsize=20)
-    plt.xlim(0,10)
+    plt.xlim(-0.1,2.5)
     plt.grid()
     plt.tight_layout()
-    plt.legend(fontsize=10,loc="best", fancybox=True)
-    plt.savefig(f"{output}/pulse_noise_post.png", dpi=350)
+    #plt.legend(fontsize=10,loc="best", fancybox=True)
+    plt.savefig(f"{output}/pulse_noise_post.png", dpi=350, transparent=True)
     plt.clf()
 
     os.makedirs(f"{output}/SN_Ratio", exist_ok=True)
@@ -571,8 +571,8 @@ def MS_Noise():
 
 #MakePulse()
 #FitRatios()
-MakeNoise()
-SaveNoise()
-#CheckPulse()
+#MakeNoise()
+#SaveNoise()
+CheckPulse()
 #MultiPulse()
 #MS_Noise()

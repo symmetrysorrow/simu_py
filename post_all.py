@@ -33,7 +33,7 @@ zure = 30
 
 pulse_num=500
 
-output="H:\\hata2025\\1332_215_195-trial"
+output="H:\\hata\\1332_142_136_300split"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -95,6 +95,15 @@ def asd_from_rfft(noise_fft, sample, rate):
             )
 
     return amp_dens
+
+
+def make_noise_time_like_checkpulse(noise_spe_dens, sample, rate):
+    noise_spe_dens = np.asarray(noise_spe_dens, dtype=float)
+    df = rate / sample
+    d_length = sample
+    noise_spe_dens = noise_spe_dens * np.sqrt(df) * (d_length / np.sqrt(2)) * 2
+    return general.GN(noise_spe_dens)[:sample]
+
 
 def MakePulse():
     with open(f"{output}/input.json", "r") as f:
@@ -368,7 +377,7 @@ def SaveNoise():
     np.savetxt(f"{output}/noise_total-bessel100k.dat", amp_dens)
 
     if True:
-        pre=np.loadtxt(f"{output}/noise_total-bessel100k-pre.dat")
+        pre=np.loadtxt(f"{output}/noise_total-bessel100k.dat")
         plt.plot(pre,label="pre")
         plt.plot(amp_dens,label="post")
         plt.xlabel("Frequency [Hz]", fontsize=20)
@@ -382,18 +391,15 @@ def CheckPulse():
         para = json.load(f)
 
     sample=int(para['samples'])
+    rate = para["rate"]
 
     # simulated noise frequency domain
     noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
-    df=para['rate']/sample
-    d_length=sample
-    noise_spe_dens*=np.sqrt(df)*(d_length/np.sqrt(2))*2
-
-    noise_time=general.GN(noise_spe_dens)[:sample]
+    noise_time = make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
     print(f"spe len:{len(noise_spe_dens)} time len:{len(noise_time)}")
 
-    time = np.linspace(0, para['samples'] / para['rate'], int(para['samples']))
-    frequency_pulse = np.arange(0, para['rate'], para['rate'] / int(para['samples']))
+    time = np.linspace(0, para['samples'] / rate, int(para['samples']))
+    frequency_pulse = np.arange(0, rate, rate / int(para['samples']))
 
     # --- Pulse time domain
     cnt = 0
@@ -428,7 +434,7 @@ def CheckPulse():
     for i in para["position"]:
         data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
 
-        data += general.GN(noise_spe_dens)[:sample]
+        data += make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
         #data = general.Bessel(data,para['rate'],para['cutoff'])
             
         plt.plot(time * 1e3,data * 1e6,color=cm.hsv((float(cnt)) / float(len(para["position"]))),linewidth=1.5,label="abs" + str(i),)
@@ -461,7 +467,7 @@ def CheckPulse():
     #SN ratio
     for i in para["position"]:
         pulse = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
-        pulse_noise=pulse+general.GN(noise_spe_dens)[:sample]
+        pulse_noise = pulse + make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
         pulse_rfft= np.fft.rfft(pulse)
         pulse_noise_rfft= np.fft.rfft(pulse_noise)
         plt.plot(frequency_pulse[:len(pulse_noise_rfft)],np.abs(pulse_noise_rfft),label=f"posi+noise",linestyle='--')
@@ -483,25 +489,18 @@ def MultiPulse():
     pulse_num=300
     with open(f"{output}/input.json", "r") as f:
         para = json.load(f)
+    sample = int(para["samples"])
+    rate = para["rate"]
 
     def AddPulse(noise_spe_dens,data):
-        noise_samples=len(noise_spe_dens)
-
-        df = 1e6 / noise_samples
-
-        cnt = random.randint(1, 10000)
-        noise_spe = random_noise(noise_spe_dens, cnt)
-        ifft_input = noise_spe * np.sqrt(df) * (noise_samples / np.sqrt(2)) * 2 
-        #ifft_input = noise_spe * np.sqrt(df) * (noise_samples)
-        noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
-        data_n = data + noise_ifft[:len(data)]
-        return data_n
+        noise_time = make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
+        return data + noise_time[:len(data)]
 
     def Process(pulse,output,noise_spe_dens,ch,posi,k,para):
         noised_pulse=AddPulse(noise_spe_dens,pulse)
         np.savetxt(f"{output}/{para["E"]}keV_{posi}/pulse_noise/CH{ch}/CH{ch}_{k}.dat",noised_pulse)
 
-    noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
+    noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
 
     for posi in tqdm.tqdm(para["position"]):
         noise_path=f"{output}/{para["E"]}keV_{posi}/pulse_noise"
@@ -524,27 +523,21 @@ def MultiPulse():
                         print(f"error:{e}")
 
 def MS_Noise():
+    with open(f"{output}/input.json", "r") as f:
+        para = json.load(f)
+    sample = int(para["samples"])
+    rate = para["rate"]
+
     def AddPulse(noise_spe_dens,data):
-        noise_samples=len(noise_spe_dens)
-
-        df = 1e6 / noise_samples
-
-        cnt = random.randint(1, 10000)
-        noise_spe = random_noise(noise_spe_dens, cnt)
-        ifft_input = noise_spe * np.sqrt(df) * (noise_samples / np.sqrt(2)) * 2 
-        noise_ifft = np.fft.ifft(ifft_input, noise_samples).real
-        data_n = data + noise_ifft[:len(data)]
-        return data_n
+        noise_time = make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
+        return data + noise_time[:len(data)]
     
-    noise_spe_dens = np.loadtxt(f"{output}/noise_spectral_total_alpha71beta1.6.dat")
+    noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
 
     def Process(file,output,noise_spe_dens,ch,num,posi,para):
         pulse=np.loadtxt(file)
         noised_pulse=AddPulse(noise_spe_dens,pulse)
         np.savetxt(f"{output}/{para["E"]}keV_{posi}/pulse_noise_ms_test/CH{ch}/CH{ch}_{num}.dat",noised_pulse)
-
-    with open(f"{output}/input.json", "r") as f:
-        para = json.load(f)
 
     for posi in tqdm.tqdm(para["position"]):
         for ch in [0,1]:
@@ -569,10 +562,10 @@ def MS_Noise():
                 for future in futures:
                     future.result()  # 処理結果が必要な場合、ここで結果を取得
 
-#MakePulse()
-#FitRatios()
-#MakeNoise()
-#SaveNoise()
+MakePulse()
+FitRatios()
+MakeNoise()
+SaveNoise()
 CheckPulse()
-#MultiPulse()
+MultiPulse()
 #MS_Noise()

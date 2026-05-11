@@ -39,9 +39,9 @@ def extract_features(pulse, dt=1.0):
     except Exception:
         tau = 1e-9
 
-    rise_10 = np.argmax(y[: idx_max + 1] >= h_max * 0.1)
-    rise_90 = np.argmax(y[: idx_max + 1] >= h_max * 0.9)
-    rise_time = (rise_90 - rise_10) * dt / len(pulse)
+    rise_20 = np.argmax(y[: idx_max + 1] >= h_max * 0.2)
+    rise_80 = np.argmax(y[: idx_max + 1] >= h_max * 0.8)
+    rise_time = (rise_80 - rise_20) * dt / len(pulse)
     return h_max, rise_time, tau
 
 
@@ -70,11 +70,11 @@ def build_wave_weights(pulse, presample):
         return weights
 
     idx_peak = np.argmax(y)
-    above_10 = np.where(y[: idx_peak + 1] >= h_max * 0.1)[0]
-    above_90 = np.where(y[: idx_peak + 1] >= h_max * 0.9)[0]
+    above_20 = np.where(y[: idx_peak + 1] >= h_max * 0.2)[0]
+    above_80 = np.where(y[: idx_peak + 1] >= h_max * 0.8)[0]
 
-    rise_start = int(above_10[0]) if len(above_10) else max(0, idx_peak - 5)
-    rise_end = int(above_90[0]) if len(above_90) else idx_peak
+    rise_start = int(above_20[0]) if len(above_20) else max(0, idx_peak - 5)
+    rise_end = int(above_80[0]) if len(above_80) else idx_peak
     rise_width = max(1, rise_end - rise_start)
 
     peak_core_left = max(0, idx_peak - rise_width)
@@ -206,7 +206,7 @@ def err_func(params):
     e_tau = ((sim_tau - exp_tau) / exp_tau) ** 2
 
     wave_errors = np.array([e_wave_high, e_wave_low])
-    wave_error_weights = np.array([30.0, 20.0])
+    wave_error_weights = np.array([0.0, 0.0])
 
     feature_errors = np.array([e_h_high, e_tr_high, e_h_low, e_tr_low, e_tau])
     feature_error_weights = np.array([8.0, 12.0, 8.0, 6.0, 6.0])

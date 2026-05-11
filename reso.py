@@ -2,6 +2,7 @@ import csv
 import numpy as np
 import json
 import pandas as pd
+import os
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -11,6 +12,43 @@ import glob
 import re
 import tqdm
 import getpara as gp
+
+
+def save_readpulse_debug(Data_path, pulse_raw, pulse_filt, para, path, reason, peak_index=None, rise_10=None, rise_90=None):
+    debug_dir = f"{Data_path}/debug_readpulse"
+    os.makedirs(debug_dir, exist_ok=True)
+
+    t = np.arange(len(pulse_raw)) / para["rate"]
+    st_l = max(0, para["SettlingTime"] - 10)
+    st_r = min(len(pulse_filt), para["SettlingTime"] + 90)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(t, pulse_raw, color="gray", alpha=0.35, label="raw")
+    plt.plot(t, pulse_filt, color="navy", linewidth=1.2, label="filtered")
+
+    if peak_index is not None and 0 <= peak_index < len(t):
+        plt.axvline(t[peak_index], color="red", linestyle="--", label="peak")
+    if rise_10 is not None and 0 <= rise_10 < len(t):
+        plt.axvline(t[rise_10], color="green", linestyle="--", label="10%")
+    if rise_90 is not None and 0 <= rise_90 < len(t):
+        plt.axvline(t[rise_90], color="orange", linestyle="--", label="90%")
+
+    if len(pulse_filt) > 0:
+        peak = np.nanmax(pulse_filt)
+        plt.axhline(peak * 0.1, color="green", alpha=0.25)
+        plt.axhline(peak * 0.9, color="orange", alpha=0.25)
+
+    plt.axvspan(st_l / para["rate"], st_r / para["rate"], color="gray", alpha=0.18, label="Settling window")
+    plt.title(f"{path}\nreason: {reason}")
+    plt.xlabel("Time [s]")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.legend(fontsize=8)
+    plt.tight_layout()
+
+    safe_path = re.sub(r'[\\\\/:*?"<>|]', "_", str(path))
+    plt.savefig(f"{debug_dir}/{safe_path}.png", dpi=200)
+    plt.close()
 
 def ReadOutput(FilePath,key):
     df=pd.read_csv(FilePath)
@@ -114,6 +152,89 @@ def ReadPulse(Data_path, pulse, target="Pulse_ms", path="", debug_plot=False):
 
         return [np.nan, np.nan, np.nan, np.nan]
 
+
+def ReadPulse(Data_path, pulse, target="Pulse_ms", path="", debug_plot=False):
+    with open(f"{Data_path}/input.json") as f:
+        para = json.load(f)
+
+    if np.mean(pulse) <= 0:
+        pulse *= -1
+
+    pulse_filt = gp.BesselFilter(pulse, para["rate"], para["cutoff"]) if target != "Pulse_ms" else pulse
+
+    if not np.all(np.isfinite(pulse_filt)):
+        print(f"ReadPulse failed: non-finite values in pulse ({path})")
+        save_readpulse_debug(Data_path, pulse, pulse_filt, para, path, "non-finite values")
+        return [np.nan, np.nan, np.nan, np.nan]
+
+    peak = np.max(pulse_filt)
+    peak_index = int(np.argmax(pulse_filt))
+
+    if peak_index < 10:
+        print(f"ReadPulse failed: peak too early ({path})")
+        save_readpulse_debug(Data_path, pulse, pulse_filt, para, path, "peak too early", peak_index=peak_index)
+        return [np.nan, np.nan, np.nan, np.nan]
+
+    l = max(0, peak_index - 10)
+    r = min(len(pulse_filt), peak_index + 90)
+    peak_av = np.mean(pulse_filt[l:r])
+
+    rise_90 = None
+    for i in reversed(range(0, peak_index)):
+        if pulse_filt[i] <= peak * 0.9:
+            rise_90 = i
+            break
+    if rise_90 is None:
+        print(f"ReadPulse failed: rise_90 not found ({path})")
+        save_readpulse_debug(Data_path, pulse, pulse_filt, para, path, "rise_90 not found", peak_index=peak_index)
+        return [np.nan, np.nan, np.nan, np.nan]
+
+    rise_10 = None
+    for j in reversed(range(0, rise_90)):
+        if pulse_filt[j] <= peak * 0.1:
+            rise_10 = j
+            break
+    if rise_10 is None:
+        print(f"ReadPulse failed: rise_10 not found ({path})")
+        save_readpulse_debug(Data_path, pulse, pulse_filt, para, path, "rise_10 not found", peak_index=peak_index, rise_90=rise_90)
+        return [np.nan, np.nan, np.nan, np.nan]
+
+    rise = (rise_90 - rise_10) / para["rate"]
+
+    st_l = para["SettlingTime"] - 10
+    st_r = para["SettlingTime"] + 90
+    if st_l < 0 or st_r > len(pulse_filt) or st_l >= st_r:
+        print(f"ReadPulse failed: invalid settling window ({path})")
+        save_readpulse_debug(Data_path, pulse, pulse_filt, para, path, "invalid settling window", peak_index=peak_index, rise_10=rise_10, rise_90=rise_90)
+        return [np.nan, np.nan, np.nan, np.nan]
+
+    ST_window = pulse_filt[st_l:st_r]
+    if len(ST_window) == 0 or not np.all(np.isfinite(ST_window)):
+        print(f"ReadPulse failed: invalid settling samples ({path})")
+        save_readpulse_debug(Data_path, pulse, pulse_filt, para, path, "invalid settling samples", peak_index=peak_index, rise_10=rise_10, rise_90=rise_90)
+        return [np.nan, np.nan, np.nan, np.nan]
+
+    ST_height = np.mean(ST_window)
+
+    if debug_plot:
+        t = np.arange(len(pulse_filt)) / para["rate"]
+        plt.figure(figsize=(8, 4))
+        plt.plot(t, pulse_filt, label="pulse")
+        plt.axvline(t[peak_index], color="r", linestyle="--", label="peak")
+        plt.axvline(t[rise_10], color="g", linestyle="--", label="10%")
+        plt.axvline(t[rise_90], color="orange", linestyle="--", label="90%")
+        plt.axhline(peak * 0.1, color="g", alpha=0.3)
+        plt.axhline(peak * 0.9, color="orange", alpha=0.3)
+        plt.axvspan(st_l / para["rate"], st_r / para["rate"], color="gray", alpha=0.2, label="Settling window")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Amplitude")
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    return [peak_av, peak_index, rise, ST_height]
+
+
 def MakeOutput(Data_path,target):
     with open(f"{Data_path}/input.json") as f:
         para = json.load(f)
@@ -170,6 +291,11 @@ def optimal_bin_count(data):
     return max(bin_count, 1)  # ビン数が1未満にならないようにする
 
 def MakeHistgram(data,posi,HistColor=None):
+    data = np.asarray(data, dtype=float)
+    data = data[np.isfinite(data)]
+    if len(data) == 0:
+        return np.nan, np.nan
+
     bin_num = optimal_bin_count(data)
     #bin_num=30
     hist, bin_edges = np.histogram(data, bins=bin_num, density=False)
@@ -240,11 +366,18 @@ def Resos(Data_path,target,show):
         CH0_heights=ReadOutput(CH0,"height")
         CH1_heights=ReadOutput(CH1,"height")
         
-        ratios=CH0_heights/CH1_heights
+        mask = (
+            np.isfinite(CH0_heights)
+            & np.isfinite(CH1_heights)
+            & (CH1_heights != 0)
+        )
+        ratios = CH0_heights[mask] / CH1_heights[mask]
 
         positions=find_nearest_values(ratios,fit_para)
 
         positions=spline(ratios)
+        positions = np.asarray(positions, dtype=float)
+        positions = positions[np.isfinite(positions)]
         #positions=remove_outliers(positions)
         
         fwhm,reso=MakeHistgram(positions,posi)
@@ -375,13 +508,13 @@ def try_ReadPulse(Data_path):
 
 
 show=False
-Data_path="h:/hata2025/1332_120_100"
-#MakeOutput(Data_path,"Pulse_noise")
+Data_path="H:\\hata\\1332_142_136_300split"
+MakeOutput(Data_path,"Pulse_noise")
 #MakeOutput(Data_path,"Pulse_ms")
 #MakeOutput(Data_path,"Pulse_ms_noise")
 #MakeOutput(Data_path,"pulse_noise_ms_test")
-#Resos(Data_path,"Pulse_noise",show)
+Resos(Data_path,"Pulse_noise",show)
 #Resos(Data_path,"Pulse_ms",show)
 #Resos(Data_path,"Pulse_ms_noise",show)
 #Resos(Data_path,"pulse_noise_ms_test",show)
-try_ReadPulse(Data_path)
+#try_ReadPulse(Data_path)

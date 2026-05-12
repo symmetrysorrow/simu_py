@@ -33,7 +33,7 @@ zure = 30
 
 pulse_num=500
 
-output="H:\\hata\\1332_142_136_300split"
+output="H:\\hata\\662_142_136_300split"
 
 def random_noise(spe, seed):
     spe_re = spe[::-1]  # reverce
@@ -97,12 +97,9 @@ def asd_from_rfft(noise_fft, sample, rate):
     return amp_dens
 
 
-def make_noise_time_like_checkpulse(noise_spe_dens, sample, rate):
+def make_noise_time_from_asd(noise_spe_dens, sample, rate, rng=None):
     noise_spe_dens = np.asarray(noise_spe_dens, dtype=float)
-    df = rate / sample
-    d_length = sample
-    noise_spe_dens = noise_spe_dens * np.sqrt(df) * (d_length / np.sqrt(2)) * 2
-    return general.GN(noise_spe_dens)[:sample]
+    return generate_noise_from_asd(noise_spe_dens, sample, rate, rng=rng)
 
 
 def MakePulse():
@@ -251,7 +248,8 @@ def MakeNoise():
     noise = np.array(noise).T
     np.savetxt(f"{output}/noise_each.dat",noise)
 
-    np.savetxt(f"{output}/noise_total.dat", np.sum(noise,axis=0))
+    noise_total = np.sqrt(np.sum(noise ** 2, axis=0))
+    np.savetxt(f"{output}/noise_total.dat", noise_total)
 
     np.savetxt(f"{output}/noise_a-a.dat",noise[4,:])
 
@@ -332,7 +330,7 @@ def MakeNoise():
     )
 
     plt.plot(
-        frequency, np.sum(noise,axis=0), color="black", linewidth=3, label="Total Noise"
+        frequency, noise_total, color="black", linewidth=3, label="Total Noise"
     )
 
     plt.xlabel("Frequency [Hz]", fontsize=20)
@@ -395,7 +393,7 @@ def CheckPulse():
 
     # simulated noise frequency domain
     noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
-    noise_time = make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
+    noise_time = make_noise_time_from_asd(noise_spe_dens, sample, rate)
     print(f"spe len:{len(noise_spe_dens)} time len:{len(noise_time)}")
 
     time = np.linspace(0, para['samples'] / rate, int(para['samples']))
@@ -434,7 +432,7 @@ def CheckPulse():
     for i in para["position"]:
         data = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
 
-        data += make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
+        data += make_noise_time_from_asd(noise_spe_dens, sample, rate)
         #data = general.Bessel(data,para['rate'],para['cutoff'])
             
         plt.plot(time * 1e3,data * 1e6,color=cm.hsv((float(cnt)) / float(len(para["position"]))),linewidth=1.5,label="abs" + str(i),)
@@ -467,7 +465,7 @@ def CheckPulse():
     #SN ratio
     for i in para["position"]:
         pulse = np.loadtxt(f"{output}/{para["E"]}keV_{i}/pulse/CH0/CH0_1.dat")
-        pulse_noise = pulse + make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
+        pulse_noise = pulse + make_noise_time_from_asd(noise_spe_dens, sample, rate)
         pulse_rfft= np.fft.rfft(pulse)
         pulse_noise_rfft= np.fft.rfft(pulse_noise)
         plt.plot(frequency_pulse[:len(pulse_noise_rfft)],np.abs(pulse_noise_rfft),label=f"posi+noise",linestyle='--')
@@ -493,7 +491,7 @@ def MultiPulse():
     rate = para["rate"]
 
     def AddPulse(noise_spe_dens,data):
-        noise_time = make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
+        noise_time = make_noise_time_from_asd(noise_spe_dens, sample, rate)
         return data + noise_time[:len(data)]
 
     def Process(pulse,output,noise_spe_dens,ch,posi,k,para):
@@ -529,7 +527,7 @@ def MS_Noise():
     rate = para["rate"]
 
     def AddPulse(noise_spe_dens,data):
-        noise_time = make_noise_time_like_checkpulse(noise_spe_dens, sample, rate)
+        noise_time = make_noise_time_from_asd(noise_spe_dens, sample, rate)
         return data + noise_time[:len(data)]
     
     noise_spe_dens = np.loadtxt(f"{output}/noise_total.dat")
@@ -568,4 +566,4 @@ MakeNoise()
 SaveNoise()
 CheckPulse()
 MultiPulse()
-#MS_Noise()
+MS_Noise()

@@ -53,6 +53,54 @@ def ReadOutput(FilePath, key):
     return df[key].to_numpy()
 
 
+def robust_scale(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return np.nan, np.nan
+
+    median = np.median(values)
+    mad = np.median(np.abs(values - median))
+    if np.isfinite(mad) and mad > 0:
+        scale = 1.4826 * mad
+    else:
+        q25, q75 = np.percentile(values, [25, 75])
+        iqr = q75 - q25
+        scale = iqr / 1.349 if np.isfinite(iqr) and iqr > 0 else np.std(values)
+
+    return median, scale
+
+
+def remove_outlier_events(CH0_df, CH1_df, z_thresh=4.5):
+    """
+    Remove event pairs whose CH0 pulse shape is clearly off.
+
+    CH0 is used as the primary quality gate here because the abnormal
+    17-position behavior is concentrated on CH0. We keep the two channel
+    CSV rows aligned by dropping the same event indices from both.
+    """
+    mask = (
+        np.isfinite(CH0_df["height"].to_numpy(dtype=float))
+        & np.isfinite(CH0_df["peak_index"].to_numpy(dtype=float))
+        & np.isfinite(CH1_df["height"].to_numpy(dtype=float))
+    )
+
+    sum_height = CH0_df["height"].to_numpy(dtype=float) + CH1_df["height"].to_numpy(dtype=float)
+    log_sum_height = np.log10(np.clip(sum_height, np.finfo(float).tiny, None))
+
+    median, scale = robust_scale(log_sum_height[mask])
+    if np.isfinite(scale) and scale > 0:
+        z = np.abs(log_sum_height - median) / scale
+        mask &= np.isfinite(z) & (z <= z_thresh)
+
+    median, scale = robust_scale(CH0_df.loc[mask, "peak_index"].to_numpy(dtype=float))
+    if np.isfinite(scale) and scale > 0:
+        z = np.abs(CH0_df["peak_index"].to_numpy(dtype=float) - median) / scale
+        mask &= np.isfinite(z) & (z <= z_thresh)
+
+    return CH0_df.loc[mask].reset_index(drop=True), CH1_df.loc[mask].reset_index(drop=True), mask
+
+
 def remove_outliers(data, percentile=0.1):
     lower_bound = np.percentile(data, percentile)
     upper_bound = np.percentile(data, 100 - percentile)
@@ -216,6 +264,12 @@ def MakeHistgram(data, posi, HistColor=None):
     fwhm = 2 * stddev_fit * np.sqrt(2 * np.log(2))
 
     reference_width = 2 * np.std(data) * np.sqrt(2 * np.log(2))
+    sample_mean = np.mean(data)
+    robust_sigma = (np.percentile(data, 84) - np.percentile(data, 16)) / 2
+    robust_fwhm = 2 * robust_sigma * np.sqrt(2 * np.log(2))
+    robust_reso = robust_fwhm / sample_mean if sample_mean > 0 else np.nan
+    fit_reso = fwhm / mean_fit if mean_fit > 0 else np.nan
+
     if np.isfinite(reference_width) and reference_width > 0 and fwhm < 0.6 * reference_width:
         retry_bins = min(max(12, bin_num // 2), 14)
         if retry_bins != bin_num:
@@ -225,6 +279,14 @@ def MakeHistgram(data, posi, HistColor=None):
             popt, _ = curve_fit(gaussian, bin_centers, hist, p0=initial_guess, maxfev=10000000)
             _, mean_fit, stddev_fit = popt
             fwhm = 2 * stddev_fit * np.sqrt(2 * np.log(2))
+            fit_reso = fwhm / mean_fit if mean_fit > 0 else np.nan
+
+    # If the Gaussian fit becomes much broader than a robust percentile-based
+    # estimate, fall back to the robust width so one skewed histogram binning
+    # does not dominate the reported resolution.
+    if np.isfinite(robust_reso) and np.isfinite(fit_reso) and fit_reso > 1.5 * robust_reso:
+        fwhm = robust_fwhm
+        mean_fit = sample_mean
 
     x_fit = np.linspace(bin_edges[0], bin_edges[-1], 1000)
     plt.plot(x_fit, gaussian(x_fit, *popt), color="red", alpha=0.5)
@@ -263,8 +325,12 @@ def Resos(Data_path, target, show):
 
     fwhms = []
     for CH0, CH1, posi in zip(CH0_files, CH1_files, para["position"]):
-        CH0_heights = ReadOutput(CH0, "height")
-        CH1_heights = ReadOutput(CH1, "height")
+        CH0_df = pd.read_csv(CH0)
+        CH1_df = pd.read_csv(CH1)
+        CH0_df, CH1_df, quality_mask = remove_outlier_events(CH0_df, CH1_df)
+
+        CH0_heights = CH0_df["height"].to_numpy(dtype=float)
+        CH1_heights = CH1_df["height"].to_numpy(dtype=float)
         mask = np.isfinite(CH0_heights) & np.isfinite(CH1_heights) & (CH1_heights != 0)
         ratios = CH0_heights[mask] / CH1_heights[mask]
 
@@ -273,6 +339,9 @@ def Resos(Data_path, target, show):
 
         fwhm, _ = MakeHistgram(positions, posi)
         fwhms.append(fwhm)
+        removed = int((~quality_mask).sum())
+        if removed > 0:
+            print(f"Position {posi}: removed {removed} outlier events from CH0/CH1 pair")
 
     fwhms = np.array(fwhms)
     np.savetxt(f"{Data_path}/fwhms_{target}.txt", fwhms)
@@ -294,10 +363,16 @@ def Resos(Data_path, target, show):
 
     ene_reso_sum = []
     for CH0, CH1, posi, color in zip(CH0_files, CH1_files, para["position"], colors):
-        CH0_heights = ReadOutput(CH0, "height")
-        CH1_heights = ReadOutput(CH1, "height")
+        CH0_df = pd.read_csv(CH0)
+        CH1_df = pd.read_csv(CH1)
+        CH0_df, CH1_df, quality_mask = remove_outlier_events(CH0_df, CH1_df)
+        CH0_heights = CH0_df["height"].to_numpy(dtype=float)
+        CH1_heights = CH1_df["height"].to_numpy(dtype=float)
         _, reso = MakeHistgram(CH0_heights + CH1_heights, posi, color)
         ene_reso_sum.append(reso * para["E"])
+        removed = int((~quality_mask).sum())
+        if removed > 0:
+            print(f"Position {posi}: removed {removed} outlier events for Sum")
 
     plt.xlabel("Current[A]", fontsize=15)
     plt.ylabel("Count", fontsize=15)
@@ -313,10 +388,16 @@ def Resos(Data_path, target, show):
 
     ene_reso_max = []
     for CH0, CH1, posi, color in zip(CH0_files, CH1_files, para["position"], colors):
-        CH0_heights = ReadOutput(CH0, "height")
-        CH1_heights = ReadOutput(CH1, "height")
+        CH0_df = pd.read_csv(CH0)
+        CH1_df = pd.read_csv(CH1)
+        CH0_df, CH1_df, quality_mask = remove_outlier_events(CH0_df, CH1_df)
+        CH0_heights = CH0_df["height"].to_numpy(dtype=float)
+        CH1_heights = CH1_df["height"].to_numpy(dtype=float)
         _, reso = MakeHistgram(np.maximum(CH0_heights, CH1_heights), posi, color)
         ene_reso_max.append(reso * para["E"])
+        removed = int((~quality_mask).sum())
+        if removed > 0:
+            print(f"Position {posi}: removed {removed} outlier events for Max")
 
     plt.xlabel("Current[A]", fontsize=15)
     plt.ylabel("Count", fontsize=15)
@@ -333,10 +414,16 @@ def Resos(Data_path, target, show):
 
     ene_reso_min = []
     for CH0, CH1, posi, color in zip(CH0_files, CH1_files, para["position"], colors):
-        CH0_heights = ReadOutput(CH0, "height")
-        CH1_heights = ReadOutput(CH1, "height")
+        CH0_df = pd.read_csv(CH0)
+        CH1_df = pd.read_csv(CH1)
+        CH0_df, CH1_df, quality_mask = remove_outlier_events(CH0_df, CH1_df)
+        CH0_heights = CH0_df["height"].to_numpy(dtype=float)
+        CH1_heights = CH1_df["height"].to_numpy(dtype=float)
         _, reso = MakeHistgram(np.minimum(CH0_heights, CH1_heights), posi, color)
         ene_reso_min.append(reso * para["E"])
+        removed = int((~quality_mask).sum())
+        if removed > 0:
+            print(f"Position {posi}: removed {removed} outlier events for Min")
 
     plt.xlabel("Current[A]", fontsize=15)
     plt.ylabel("Count", fontsize=15)
@@ -352,10 +439,16 @@ def Resos(Data_path, target, show):
 
     ene_reso_st = []
     for CH0, CH1, posi, color in zip(CH0_files, CH1_files, para["position"], colors):
-        CH0_heights = ReadOutput(CH0, "ST_Height")
-        CH1_heights = ReadOutput(CH1, "ST_Height")
+        CH0_df = pd.read_csv(CH0)
+        CH1_df = pd.read_csv(CH1)
+        CH0_df, CH1_df, quality_mask = remove_outlier_events(CH0_df, CH1_df)
+        CH0_heights = CH0_df["ST_Height"].to_numpy(dtype=float)
+        CH1_heights = CH1_df["ST_Height"].to_numpy(dtype=float)
         _, reso = MakeHistgram(CH0_heights + CH1_heights, posi, color)
         ene_reso_st.append(reso * para["E"])
+        removed = int((~quality_mask).sum())
+        if removed > 0:
+            print(f"Position {posi}: removed {removed} outlier events for ST")
 
     plt.xlabel("Current[A]", fontsize=15)
     plt.ylabel("Count", fontsize=15)
@@ -388,7 +481,7 @@ def try_ReadPulse(Data_path):
 
 
 if __name__ == "__main__":
-    show = True
+    show = False
     Data_path = "H:\\hata\\1332_142_136_300split"
 
     #MakeOutput(Data_path, "Pulse_noise")
